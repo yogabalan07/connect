@@ -1,0 +1,6 @@
+{
+  "name": "Campus Doubt Hub",
+  "description": "Modern college academic and technical doubt clearing community platform for students, seniors, and campus mentors.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
