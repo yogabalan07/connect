@@ -6,3 +6,15 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Firebase — never commit secrets or local emulator artifacts
+serviceAccount*.json
+*service-account*.json
+.firebase/
+firebase-debug.log
+firestore-debug.log
+storage-debug.log
+ui-debug.log
+firebase-cache/
+functions/lib/
+functions/node_modules/
