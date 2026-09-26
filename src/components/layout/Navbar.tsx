@@ -13,15 +13,20 @@ import {
   ChevronDown
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { useAuth } from '../../hooks/useAuth';
 import { ThemeToggle } from '../ui/ThemeToggle';
 import { RoleSwitcher } from '../ui/RoleSwitcher';
 import { QuickSearchModal } from '../modals/QuickSearchModal';
 
 export const Navbar: React.FC = () => {
   const navigate = useNavigate();
-  const { currentUser, unreadNotificationsCount, logout } = useApp();
+  const { currentUser, unreadNotificationsCount } = useApp();
+  const { logout } = useAuth();
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
+
+  // Navbar only renders inside the authenticated app shell.
+  if (!currentUser) return null;
 
   return (
     <>

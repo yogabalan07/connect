@@ -16,11 +16,13 @@ import {
 import { useApp } from '../../context/AppContext';
 import { ThemeToggle } from '../ui/ThemeToggle';
 import { RoleSwitcher } from '../ui/RoleSwitcher';
-import { ToastContainer } from '../ui/ToastContainer';
 
 export const AdminLayout: React.FC = () => {
   const navigate = useNavigate();
   const { currentUser, users, reports } = useApp();
+
+  // The admin shell only renders behind RequireAdmin.
+  if (!currentUser) return null;
 
   const pendingCount = users.filter(u => u.status === 'pending').length;
   const pendingReportsCount = reports.filter(r => r.status === 'pending').length;
@@ -132,7 +134,6 @@ export const AdminLayout: React.FC = () => {
         </main>
       </div>
 
-      <ToastContainer />
     </div>
   );
 };

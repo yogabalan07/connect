@@ -23,6 +23,8 @@ export const MessagesPage: React.FC = () => {
   const [codeSnippet, setCodeSnippet] = useState('');
   const [isTyping, setIsTyping] = useState(false);
 
+  if (!currentUser) return null;
+
   const activeConv = conversations.find(c => c.id === activeConversationId) || conversations[0];
   const activeMessages = messages.filter(m => m.conversationId === activeConv?.id);
 

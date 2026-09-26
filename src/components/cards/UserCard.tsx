@@ -12,7 +12,7 @@ interface UserCardProps {
 export const UserCard: React.FC<UserCardProps> = ({ user, onMessage }) => {
   const { currentUser, followingUserIds, toggleFollowUser } = useApp();
   const isFollowing = followingUserIds.includes(user.id);
-  const isSelf = currentUser.id === user.id;
+  const isSelf = currentUser ? currentUser.id === user.id : false;
 
   return (
     <div className="rounded-2xl bg-slate-900/80 border border-slate-800/80 hover:border-slate-700/80 p-5 shadow-sm transition-all text-slate-100 flex flex-col justify-between">

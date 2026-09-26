@@ -4,16 +4,21 @@ import { AlertTriangle, Trash2, Eye, ShieldAlert, MessageSquare, HelpCircle } fr
 import { useApp } from '../../context/AppContext';
 
 export const AdminDoubtsPage: React.FC = () => {
-  const { doubts, deleteDoubt, addToast, blockUser } = useApp();
+  const { doubts, deleteDoubt, issueWarning, blockUser } = useApp();
   const [search, setSearch] = useState('');
 
   const filtered = doubts.filter(d =>
     d.title.toLowerCase().includes(search.toLowerCase()) ||
-    d.author.name.toLowerCase().includes(search.toLowerCase())
+    d.authorSnapshot.name.toLowerCase().includes(search.toLowerCase())
   );
 
-  const handleWarn = (authorName: string) => {
-    addToast(`Official academic warning issued to ${authorName}.`, 'warning');
+  const handleWarn = async (authorId: string, authorName: string) => {
+    const reason = window.prompt(
+      `Academic warning reason for ${authorName} (min 5 characters):`,
+      'Repeated off-topic or low-effort posting'
+    );
+    if (!reason) return;
+    await issueWarning(authorId, authorName, reason);
   };
 
   return (
@@ -62,11 +67,11 @@ export const AdminDoubtsPage: React.FC = () => {
                     <div className="text-[11px] text-slate-400 mt-0.5">{d.category}</div>
                   </td>
                   <td className="p-4 text-slate-300">
-                    <div className="font-semibold text-white">{d.author.name}</div>
-                    <div className="text-[11px] text-slate-500">@{d.author.username}</div>
+                    <div className="font-semibold text-white">{d.authorSnapshot.name}</div>
+                    <div className="text-[11px] text-slate-500">@{d.authorSnapshot.username}</div>
                   </td>
                   <td className="p-4 text-slate-300">
-                    {d.author.department} · {d.author.year}
+                    {d.authorSnapshot.department} · {d.authorSnapshot.year}
                   </td>
                   <td className="p-4 text-slate-400 font-mono text-[11px]">
                     <div>{d.answersCount} answers</div>
@@ -82,7 +87,7 @@ export const AdminDoubtsPage: React.FC = () => {
                     </Link>
 
                     <button
-                      onClick={() => handleWarn(d.author.name)}
+                      onClick={() => handleWarn(d.authorId, d.authorSnapshot.name)}
                       className="p-1.5 rounded-lg bg-slate-800 hover:bg-amber-500/20 text-slate-400 hover:text-amber-400"
                       title="Issue Warning"
                     >

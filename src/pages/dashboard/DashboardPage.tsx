@@ -25,6 +25,9 @@ export const DashboardPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'latest' | 'trending' | 'unanswered' | 'following'>('latest');
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Guarded route: only rendered for a signed-in, active user.
+  if (!currentUser) return null;
+
   // Feed filtering
   let feedDoubts = [...doubts];
 

@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { useApp } from '../../context/AppContext';
+import { useAuth } from '../../hooks/useAuth';
 import { Shield, GraduationCap, Award, ChevronDown } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 export const RoleSwitcher: React.FC = () => {
-  const { currentUser, switchRole } = useApp();
+  const { currentUser, switchDevPersona } = useAuth();
   const [isOpen, setIsOpen] = useState(false);
+  // DEV-only helper: the whole component renders nothing in production builds.
+  const isDev = import.meta.env.DEV;
 
   const roles = [
     {
@@ -28,15 +30,17 @@ export const RoleSwitcher: React.FC = () => {
     }
   ];
 
+  if (!isDev || !currentUser) return null;
+
   return (
     <div className="relative z-40">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-slate-700/60 bg-slate-800/80 hover:bg-slate-700/80 text-xs font-medium text-slate-200 transition-all shadow-sm"
-        title="Switch Demo Role"
+        className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg border border-dashed border-purple-700/60 bg-slate-800/80 hover:bg-slate-700/80 text-xs font-medium text-slate-200 transition-all shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
+        title="DEV persona switch (development only)"
       >
-        <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-        <span className="hidden sm:inline text-slate-400">Demo Role:</span>
+        <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+        <span className="hidden sm:inline text-slate-400">DEV:</span>
         <span className="font-semibold text-slate-100">{currentUser.name}</span>
         <ChevronDown className={`w-3.5 h-3.5 text-slate-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
@@ -52,7 +56,7 @@ export const RoleSwitcher: React.FC = () => {
           >
             <div className="px-2.5 py-1.5 mb-1 border-b border-slate-800">
               <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                Select Persona (Instant Demo)
+                Select DEV Persona (local session only)
               </span>
             </div>
             <div className="space-y-1">
@@ -62,7 +66,11 @@ export const RoleSwitcher: React.FC = () => {
                   <button
                     key={item.role}
                     onClick={() => {
-                      switchRole(item.role);
+                      try {
+                        switchDevPersona(item.role);
+                      } catch {
+                        /* dev-only helper unavailable outside `npm run dev` */
+                      }
                       setIsOpen(false);
                     }}
                     className={`w-full flex items-start gap-2.5 p-2 rounded-lg text-left transition-colors ${

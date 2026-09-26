@@ -49,3 +49,119 @@
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
+
+/* ------------------------------------------------------------------------ */
+/* Accessibility: visible keyboard focus for anything that doesn't opt out   */
+/* ------------------------------------------------------------------------ */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--focus-ring, #6366f1);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Accessibility: respect reduced-motion preferences                         */
+/* ------------------------------------------------------------------------ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ------------------------------------------------------------------------ */
+/* Light theme override layer                                                */
+/*                                                                           */
+/* The component library is built on dark slate utilities. When the user     */
+/* toggles to light mode (`html.light`), the most common surfaces, borders   */
+/* and text colors are remapped here. Accent colors (indigo/rose/amber/...)  */
+/* are left untouched. A full light-theme redesign is intentionally out of   */
+/* scope for this phase.                                                     */
+/* ------------------------------------------------------------------------ */
+html.light {
+  color-scheme: light;
+}
+
+html.light body {
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+/* Surfaces */
+html.light .bg-slate-950,
+html.light .bg-slate-950\/80,
+html.light .bg-slate-950\/90,
+html.light .bg-slate-950\/95,
+html.light .bg-slate-950\/60,
+html.light .bg-slate-950\/40 {
+  background-color: #f8fafc;
+}
+
+html.light .bg-slate-900,
+html.light .bg-slate-900\/90,
+html.light .bg-slate-900\/85,
+html.light .bg-slate-900\/80,
+html.light .bg-slate-900\/70,
+html.light .bg-slate-900\/60,
+html.light .bg-slate-900\/40 {
+  background-color: #ffffff;
+}
+
+html.light .bg-slate-800,
+html.light .bg-slate-800\/80,
+html.light .bg-slate-800\/70,
+html.light .bg-slate-800\/60,
+html.light .bg-slate-800\/40 {
+  background-color: #e2e8f0;
+}
+
+html.light .hover\:bg-slate-800:hover,
+html.light .hover\:bg-slate-800\/80:hover,
+html.light .hover\:bg-slate-800\/70:hover,
+html.light .hover\:bg-slate-800\/40:hover {
+  background-color: #cbd5e1;
+}
+
+html.light .hover\:bg-slate-700:hover,
+html.light .hover\:bg-slate-700\/80:hover {
+  background-color: #cbd5e1;
+}
+
+/* Borders */
+html.light .border-slate-800,
+html.light .border-slate-800\/80,
+html.light .border-slate-800\/60,
+html.light .border-slate-700,
+html.light .border-slate-700\/80,
+html.light .border-slate-700\/60 {
+  border-color: #e2e8f0;
+}
+
+/* Text */
+html.light .text-white {
+  color: #0f172a;
+}
+
+html.light .text-slate-100,
+html.light .text-slate-200,
+html.light .text-slate-300 {
+  color: #1e293b;
+}
+
+html.light .text-slate-400,
+html.light .text-slate-500 {
+  color: #64748b;
+}
+
+/* Toasts stay readable over the lighter canvas */
+html.light .backdrop-blur-md {
+  background-color: rgba(255, 255, 255, 0.9);
+}

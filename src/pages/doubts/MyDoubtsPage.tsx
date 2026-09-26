@@ -8,6 +8,8 @@ export const MyDoubtsPage: React.FC = () => {
   const { doubts, currentUser } = useApp();
   const [tab, setTab] = useState<'all' | 'public' | 'private' | 'solved' | 'unanswered'>('all');
 
+  if (!currentUser) return null;
+
   const myDoubts = doubts.filter(d => d.authorId === currentUser.id);
 
   let filtered = myDoubts;

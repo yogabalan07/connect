@@ -7,6 +7,8 @@ export const RightSidebar: React.FC = () => {
   const navigate = useNavigate();
   const { doubts, users, tags, followingUserIds, toggleFollowUser, currentUser } = useApp();
 
+  if (!currentUser) return null;
+
   // Trending tags
   const trendingTags = tags.filter(t => t.isTrending).slice(0, 6);
 

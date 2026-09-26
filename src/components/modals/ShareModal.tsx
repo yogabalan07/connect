@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Share2, X, Copy, Check, MessageSquare, ExternalLink } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
@@ -15,6 +15,15 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, title, 
   const [copied, setCopied] = useState(false);
 
   const fullUrl = window.location.origin + url;
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(fullUrl);
@@ -37,10 +46,14 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, title, 
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
+            aria-hidden="true"
             className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm"
           />
 
           <motion.div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="share-modal-title"
             initial={{ opacity: 0, scale: 0.95, y: 10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 10 }}
@@ -53,15 +66,19 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, title, 
                   <Share2 className="w-5 h-5" />
                 </div>
                 <div>
-                  <h3 className="text-base font-semibold text-white">Share Doubt</h3>
+                  <h3 id="share-modal-title" className="text-base font-semibold text-white">
+                    Share Doubt
+                  </h3>
                   <p className="text-xs text-slate-400">Collaborate with peers or senior study groups</p>
                 </div>
               </div>
               <button
+                type="button"
                 onClick={onClose}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                aria-label="Close share dialog"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
               >
-                <X className="w-4 h-4" />
+                <X className="w-4 h-4" aria-hidden="true" />
               </button>
             </div>
 
@@ -73,6 +90,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, title, 
                   type="text"
                   readOnly
                   value={fullUrl}
+                  aria-label="Shareable link to this doubt"
                   className="bg-transparent text-xs text-slate-300 flex-1 px-2 focus:outline-none truncate font-mono"
                 />
                 <button

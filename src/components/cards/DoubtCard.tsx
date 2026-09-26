@@ -11,7 +11,9 @@ import {
   Eye,
   MoreVertical,
   Flag,
-  Trash2
+  Trash2,
+  Pencil,
+  AlertTriangle
 } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Doubt } from '../../types';
@@ -31,6 +33,9 @@ export const DoubtCard: React.FC<DoubtCardProps> = ({ doubt, onTagClick, showDel
   const [showMenu, setShowMenu] = useState(false);
   const [showReport, setShowReport] = useState(false);
   const [showShare, setShowShare] = useState(false);
+
+  // Cards only ever render inside the authenticated app shell.
+  if (!currentUser) return null;
 
   const isBookmarked = bookmarkedDoubtIds.includes(doubt.id);
   const isAuthor = currentUser.id === doubt.authorId || currentUser.role === 'admin';
@@ -119,19 +124,19 @@ export const DoubtCard: React.FC<DoubtCardProps> = ({ doubt, onTagClick, showDel
                   onClick={e => e.stopPropagation()}
                 >
                   <img
-                    src={doubt.author.avatar}
-                    alt={doubt.author.name}
+                    src={doubt.authorSnapshot.avatar}
+                    alt={doubt.authorSnapshot.name}
                     className="w-7 h-7 rounded-full object-cover border border-slate-700/80 group-hover/author:border-indigo-400 transition-colors"
                   />
                   <span className="text-xs font-semibold text-slate-200 group-hover/author:text-indigo-300 transition-colors">
-                    {doubt.author.name}
+                    {doubt.authorSnapshot.name}
                   </span>
                 </Link>
 
                 <div className="flex items-center gap-1.5 text-[11px] text-slate-400">
-                  <span>{doubt.author.department}</span>
+                  <span>{doubt.authorSnapshot.department}</span>
                   <span aria-hidden="true">·</span>
-                  <span>{doubt.author.year} Year</span>
+                  <span>{doubt.authorSnapshot.year} Year</span>
                   <span aria-hidden="true">·</span>
                   <span>{doubt.createdAt}</span>
                 </div>
@@ -150,6 +155,19 @@ export const DoubtCard: React.FC<DoubtCardProps> = ({ doubt, onTagClick, showDel
                   <span className="flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-md">
                     <CheckCircle2 className="w-3 h-3" />
                     <span>Solved</span>
+                  </span>
+                )}
+
+                {(doubt.priority === 'high' || doubt.priority === 'urgent') && (
+                  <span
+                    className={`flex items-center gap-1 text-[11px] font-semibold px-2 py-0.5 rounded-md border ${
+                      doubt.priority === 'urgent'
+                        ? 'text-rose-400 bg-rose-500/10 border-rose-500/20'
+                        : 'text-amber-400 bg-amber-500/10 border-amber-500/20'
+                    }`}
+                  >
+                    <AlertTriangle className="w-3 h-3" aria-hidden="true" />
+                    <span className="capitalize">{doubt.priority}</span>
                   </span>
                 )}
 
@@ -181,6 +199,18 @@ export const DoubtCard: React.FC<DoubtCardProps> = ({ doubt, onTagClick, showDel
                         <Flag className="w-3.5 h-3.5" />
                         <span>Report</span>
                       </button>
+                      {isAuthor && (
+                        <button
+                          onClick={() => {
+                            setShowMenu(false);
+                            navigate(`/app/doubts/${doubt.id}/edit`);
+                          }}
+                          className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800 hover:text-indigo-300 text-left transition-colors"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                          <span>Edit</span>
+                        </button>
+                      )}
                       {(isAuthor || showDelete) && (
                         <button
                           onClick={handleDelete}
@@ -282,7 +312,7 @@ export const DoubtCard: React.FC<DoubtCardProps> = ({ doubt, onTagClick, showDel
         targetId={doubt.id}
         targetTitle={doubt.title}
         reportedUserId={doubt.authorId}
-        reportedUserName={doubt.author.name}
+        reportedUserName={doubt.authorSnapshot.name}
       />
 
       <ShareModal

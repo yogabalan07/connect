@@ -21,6 +21,9 @@ export const UserProfilePage: React.FC = () => {
   const { users, currentUser, doubts, answers, followingUserIds, toggleFollowUser } = useApp();
   const [activeTab, setActiveTab] = useState<'overview' | 'questions' | 'answers' | 'accepted'>('overview');
 
+  // Guarded route: only rendered for a signed-in, active user.
+  if (!currentUser) return null;
+
   const profileUser = users.find(u => u.id === id) || currentUser;
   const isSelf = currentUser.id === profileUser.id;
   const isFollowing = followingUserIds.includes(profileUser.id);

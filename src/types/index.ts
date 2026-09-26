@@ -1,7 +1,17 @@
 export type Department = 'CSE' | 'ECE' | 'EEE' | 'MECH' | 'CIVIL' | 'IT' | 'AIDS';
 export type AcademicYear = '1st' | '2nd' | '3rd' | '4th' | 'Faculty' | 'Alumni';
 export type UserRole = 'student' | 'mentor' | 'admin';
-export type UserStatus = 'active' | 'pending' | 'blocked';
+
+/**
+ * Lifecycle of a campus account.
+ * - pending:  registered, waiting for department admin approval
+ * - active:   fully enabled
+ * - rejected: application was denied (record is preserved for audit history)
+ * - blocked:  temporarily restricted by moderation
+ */
+export type UserStatus = 'active' | 'pending' | 'rejected' | 'blocked';
+
+export type DoubtPriority = 'low' | 'normal' | 'high' | 'urgent';
 
 export interface Badge {
   id: string;
@@ -56,21 +66,27 @@ export interface Comment {
   authorAvatar: string;
   content: string;
   createdAt: string;
+  /** Set when this comment is a reply to another comment (threading prep). */
+  parentCommentId?: string;
+  /** Handles mentioned in the comment body, e.g. ["priya_sundar"]. */
+  mentions?: string[];
 }
 
 export interface Answer {
   id: string;
   doubtId: string;
   authorId: string;
-  author: User;
+  authorSnapshot: UserSnapshot;
   content: string;
   createdAt: string;
+  updatedAt?: string;
   upvotes: number;
   downvotes: number;
   isAccepted: boolean;
   codeSnippet?: CodeSnippet;
   attachments?: Attachment[];
   comments: Comment[];
+  mentions?: string[];
   userVote?: 'up' | 'down' | null;
 }
 
@@ -79,7 +95,7 @@ export interface Doubt {
   title: string;
   description: string;
   authorId: string;
-  author: User;
+  authorSnapshot: UserSnapshot;
   createdAt: string;
   updatedAt?: string;
   category: string;
@@ -87,6 +103,7 @@ export interface Doubt {
   tags: string[];
   visibility: 'public' | 'private';
   allowedUserIds?: string[];
+  priority?: DoubtPriority;
   upvotes: number;
   downvotes: number;
   views: number;
@@ -94,6 +111,7 @@ export interface Doubt {
   hasAcceptedAnswer: boolean;
   codeSnippet?: CodeSnippet;
   attachments?: Attachment[];
+  mentions?: string[];
   isPinned?: boolean;
   userVote?: 'up' | 'down' | null;
   isBookmarked?: boolean;
@@ -207,4 +225,53 @@ export interface UserStats {
   acceptedAnswers: number;
   reputation: number;
   upvotesReceived: number;
+}
+
+/**
+ * Denormalized author data embedded in content documents.
+ * Mirrors the `users/{uid}` document so Firestore rules can validate
+ * authorship without extra reads, and so content survives profile edits.
+ */
+export interface UserSnapshot {
+  id: string;
+  name: string;
+  username: string;
+  avatar: string;
+  department: Department;
+  year: AcademicYear;
+  role: UserRole;
+  reputation: number;
+}
+
+export function toUserSnapshot(user: User): UserSnapshot {
+  return {
+    id: user.id,
+    name: user.name,
+    username: user.username,
+    avatar: user.avatar,
+    department: user.department,
+    year: user.year,
+    role: user.role,
+    reputation: user.reputation
+  };
+}
+
+/**
+ * Admin moderation settings singleton (`adminSettings/{singleton}` in Firestore).
+ */
+export interface AdminSettings {
+  requireFacultyApproval: boolean;
+  autoFlagSpamWords: boolean;
+  allowedDomain: string;
+  minRepToComment: number;
+  updatedAt?: string;
+}
+
+export interface Warning {
+  id: string;
+  userId: string;
+  userName: string;
+  reason: string;
+  issuedBy: string;
+  issuedAt: string;
 }

@@ -65,7 +65,7 @@ export const ExplorePage: React.FC = () => {
       const match =
         d.title.toLowerCase().includes(q) ||
         d.description.toLowerCase().includes(q) ||
-        d.author.name.toLowerCase().includes(q) ||
+        d.authorSnapshot.name.toLowerCase().includes(q) ||
         d.tags.some(t => t.toLowerCase().includes(q));
       if (!match) return false;
     }
@@ -77,10 +77,10 @@ export const ExplorePage: React.FC = () => {
     if (selectedTag && !d.tags.includes(selectedTag)) return false;
 
     // Department
-    if (selectedDept !== 'all' && d.author.department !== selectedDept) return false;
+    if (selectedDept !== 'all' && d.authorSnapshot.department !== selectedDept) return false;
 
     // Year
-    if (selectedYear !== 'all' && d.author.year !== selectedYear) return false;
+    if (selectedYear !== 'all' && d.authorSnapshot.year !== selectedYear) return false;
 
     // Visibility
     if (visibilityFilter === 'private' && d.visibility !== 'private') return false;

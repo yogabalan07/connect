@@ -22,13 +22,17 @@ import {
   AtSign,
   Sparkles,
   ShieldCheck,
-  UserCheck
+  UserCheck,
+  Pencil,
+  Trash2
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useApp } from '../../context/AppContext';
 import { CodeBlock } from '../../components/doubts/CodeBlock';
 import { ReportModal } from '../../components/modals/ReportModal';
 import { ShareModal } from '../../components/modals/ShareModal';
+import { canViewDoubt } from '../../services/doubtService';
+import { canEditAnswer } from '../../services/answerService';
 import { Answer } from '../../types';
 
 export const DoubtDetailPage: React.FC = () => {
@@ -44,6 +48,8 @@ export const DoubtDetailPage: React.FC = () => {
     toggleBookmark,
     bookmarkedDoubtIds,
     addCommentToAnswer,
+    updateAnswer,
+    deleteAnswer,
     currentUser,
     users
   } = useApp();
@@ -74,6 +80,14 @@ export const DoubtDetailPage: React.FC = () => {
     userName: string;
   } | null>(null);
 
+  // In-place answer editing
+  const [editingAnswerId, setEditingAnswerId] = useState<string | null>(null);
+  const [editAnswerText, setEditAnswerText] = useState('');
+  const [editAnswerCode, setEditAnswerCode] = useState('');
+
+  // Guarded route: only rendered for a signed-in, active user.
+  if (!currentUser) return null;
+
   if (!doubt) {
     return (
       <div className="p-12 text-center rounded-2xl bg-slate-900/60 border border-slate-800">
@@ -88,14 +102,35 @@ export const DoubtDetailPage: React.FC = () => {
 
   const isBookmarked = bookmarkedDoubtIds.includes(doubt.id);
   const isQuestionAuthor = currentUser.id === doubt.authorId || currentUser.role === 'admin';
-
-  // Private doubt security check
   const isPrivate = doubt.visibility === 'private';
-  const hasAccess =
-    !isPrivate ||
-    (doubt.allowedUserIds && doubt.allowedUserIds.includes(currentUser.id)) ||
-    currentUser.role === 'admin' ||
-    doubt.authorId === currentUser.id;
+
+  // Private doubt check (deny by default — same rule as the feed filter).
+  const hasAccess = canViewDoubt(doubt, currentUser);
+
+  if (!hasAccess) {
+    // Restricted: reveal nothing about the question itself.
+    return (
+      <div className="p-10 text-center rounded-2xl bg-slate-900/60 border border-amber-500/30 space-y-3">
+        <div className="w-12 h-12 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-400 flex items-center justify-center mx-auto">
+          <Lock className="w-6 h-6" aria-hidden="true" />
+        </div>
+        <h2 className="text-base font-bold text-white">Private question</h2>
+        <p className="text-xs text-slate-400 max-w-md mx-auto leading-relaxed">
+          This question is shared with a limited participant list. You are not on it, so its title,
+          description, code and answers stay hidden.
+        </p>
+        <p className="text-[11px] text-slate-500">
+          Ask the author or a campus mentor to invite you if you need access.
+        </p>
+        <Link
+          to="/app/explore"
+          className="inline-block mt-2 text-xs font-semibold text-indigo-400 hover:underline"
+        >
+          Back to Explore
+        </Link>
+      </div>
+    );
+  }
 
   const handleVoteQuestion = (type: 'up' | 'down') => {
     toggleVoteDoubt(doubt.id, type);
@@ -124,23 +159,23 @@ export const DoubtDetailPage: React.FC = () => {
     if (!editorContent.trim()) return;
     setIsSubmitting(true);
 
-    setTimeout(() => {
-      addAnswer(
-        doubt.id,
-        editorContent.trim(),
-        editorCode.trim() ? { language: editorLanguage, code: editorCode.trim() } : undefined
-      );
-      setEditorContent('');
-      setEditorCode('');
-      setShowCodeInput(false);
-      setIsSubmitting(false);
+    // The mock service validates and persists immediately; when Firebase
+    // lands, addAnswer becomes async and its failure is surfaced as a toast.
+    addAnswer(
+      doubt.id,
+      editorContent.trim(),
+      editorCode.trim() ? { language: editorLanguage, code: editorCode.trim() } : undefined
+    );
+    setEditorContent('');
+    setEditorCode('');
+    setShowCodeInput(false);
+    setIsSubmitting(false);
 
-      confetti({
-        particleCount: 70,
-        spread: 70,
-        origin: { y: 0.7 }
-      });
-    }, 300);
+    confetti({
+      particleCount: 70,
+      spread: 70,
+      origin: { y: 0.7 }
+    });
   };
 
   const insertMarkdown = (syntax: string) => {
@@ -223,16 +258,16 @@ export const DoubtDetailPage: React.FC = () => {
               <div className="flex items-center gap-2.5 flex-wrap">
                 <Link to={`/app/users/${doubt.authorId}`} className="flex items-center gap-2 group">
                   <img
-                    src={doubt.author.avatar}
-                    alt={doubt.author.name}
+                    src={doubt.authorSnapshot.avatar}
+                    alt={doubt.authorSnapshot.name}
                     className="w-8 h-8 rounded-full object-cover border border-slate-700"
                   />
                   <div>
                     <span className="text-xs font-bold text-white group-hover:text-indigo-300 transition-colors">
-                      {doubt.author.name}
+                      {doubt.authorSnapshot.name}
                     </span>
                     <div className="text-[10px] text-slate-400">
-                      {doubt.author.department} · {doubt.author.year} Year
+                      {doubt.authorSnapshot.department} · {doubt.authorSnapshot.year} Year
                     </div>
                   </div>
                 </Link>
@@ -327,6 +362,17 @@ export const DoubtDetailPage: React.FC = () => {
               </div>
 
               <div className="flex items-center gap-2">
+                {isQuestionAuthor && (
+                  <Link
+                    to={`/app/doubts/${doubt.id}/edit`}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-slate-800/80 hover:bg-slate-800 text-slate-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                    title="Edit question"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    <span>Edit</span>
+                  </Link>
+                )}
+
                 <button
                   onClick={() => toggleBookmark(doubt.id)}
                   className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-colors ${
@@ -354,7 +400,7 @@ export const DoubtDetailPage: React.FC = () => {
                       id: doubt.id,
                       title: doubt.title,
                       userId: doubt.authorId,
-                      userName: doubt.author.name
+                      userName: doubt.authorSnapshot.name
                     });
                     setShowReport(true);
                   }}
@@ -441,23 +487,23 @@ export const DoubtDetailPage: React.FC = () => {
                       <div className="flex items-center justify-between gap-3 mb-3">
                         <Link to={`/app/users/${ans.authorId}`} className="flex items-center gap-2.5 group">
                           <img
-                            src={ans.author.avatar}
-                            alt={ans.author.name}
+                            src={ans.authorSnapshot.avatar}
+                            alt={ans.authorSnapshot.name}
                             className="w-8 h-8 rounded-full object-cover border border-slate-700"
                           />
                           <div>
                             <div className="flex items-center gap-1.5">
                               <span className="text-xs font-bold text-white group-hover:text-indigo-300 transition-colors">
-                                {ans.author.name}
+                                {ans.authorSnapshot.name}
                               </span>
-                              {ans.author.role === 'mentor' && (
+                              {ans.authorSnapshot.role === 'mentor' && (
                                 <span className="text-[10px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.2 rounded">
                                   Mentor
                                 </span>
                               )}
                             </div>
                             <div className="text-[10px] text-slate-400">
-                              {ans.author.department} · {ans.author.reputation} rep · {ans.createdAt}
+                              {ans.authorSnapshot.department} · {ans.authorSnapshot.reputation} rep · {ans.createdAt}
                             </div>
                           </div>
                         </Link>
@@ -476,21 +522,109 @@ export const DoubtDetailPage: React.FC = () => {
                             <span>{isAccepted ? 'Accepted' : 'Mark as Accepted'}</span>
                           </button>
                         )}
+
+                        {/* Edit / Delete (answer author or admin) */}
+                        {canEditAnswer(ans, currentUser) && editingAnswerId !== ans.id && (
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingAnswerId(ans.id);
+                                setEditAnswerText(ans.content);
+                                setEditAnswerCode(ans.codeSnippet?.code ?? '');
+                              }}
+                              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                              <span>Edit</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (window.confirm('Delete this answer permanently?')) {
+                                  deleteAnswer(ans.id);
+                                }
+                              }}
+                              className="p-2 rounded-xl text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500"
+                              title="Delete answer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
                       </div>
 
-                      {/* Content Prose */}
-                      <div className="text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-line space-y-2">
-                        {ans.content}
-                      </div>
-
-                      {/* Code Block if any */}
-                      {ans.codeSnippet && (
-                        <div className="mt-3">
-                          <CodeBlock
-                            code={ans.codeSnippet.code}
-                            language={ans.codeSnippet.language}
+                      {/* Content Prose (or inline editor) */}
+                      {editingAnswerId === ans.id ? (
+                        <div className="space-y-2">
+                          <label htmlFor={`edit-answer-${ans.id}`} className="sr-only">
+                            Answer text
+                          </label>
+                          <textarea
+                            id={`edit-answer-${ans.id}`}
+                            rows={6}
+                            value={editAnswerText}
+                            onChange={e => setEditAnswerText(e.target.value)}
+                            className="w-full p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
                           />
+                          <label
+                            htmlFor={`edit-answer-code-${ans.id}`}
+                            className="text-[11px] font-semibold text-slate-400 block"
+                          >
+                            Code snippet (optional)
+                          </label>
+                          <textarea
+                            id={`edit-answer-code-${ans.id}`}
+                            rows={4}
+                            value={editAnswerCode}
+                            onChange={e => setEditAnswerCode(e.target.value)}
+                            className="w-full p-3 rounded-xl bg-slate-950 border border-slate-800 font-mono text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                          />
+                          <div className="flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setEditingAnswerId(null)}
+                              className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!editAnswerText.trim()) return;
+                                updateAnswer(ans.id, {
+                                  content: editAnswerText.trim(),
+                                  codeSnippet: editAnswerCode.trim()
+                                    ? {
+                                        language: ans.codeSnippet?.language ?? 'cpp',
+                                        code: editAnswerCode.trim()
+                                      }
+                                    : undefined
+                                });
+                                setEditingAnswerId(null);
+                              }}
+                              className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
+                            >
+                              Save changes
+                            </button>
+                          </div>
                         </div>
+                      ) : (
+                        <>
+                          <div className="text-xs sm:text-sm text-slate-200 leading-relaxed whitespace-pre-line space-y-2">
+                            {ans.content}
+                          </div>
+
+                          {/* Code Block if any */}
+                          {ans.codeSnippet && (
+                            <div className="mt-3">
+                              <CodeBlock
+                                code={ans.codeSnippet.code}
+                                language={ans.codeSnippet.language}
+                              />
+                            </div>
+                          )}
+                        </>
                       )}
 
                       {/* Comments Thread */}
@@ -531,9 +665,9 @@ export const DoubtDetailPage: React.FC = () => {
                             setReportTarget({
                               type: 'answer',
                               id: ans.id,
-                              title: `Answer by ${ans.author.name}`,
+                              title: `Answer by ${ans.authorSnapshot.name}`,
                               userId: ans.authorId,
-                              userName: ans.author.name
+                              userName: ans.authorSnapshot.name
                             });
                             setShowReport(true);
                           }}

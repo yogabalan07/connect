@@ -7,7 +7,7 @@ export const mockAnswers: Answer[] = [
     id: 'ans-1',
     doubtId: 'doubt-1',
     authorId: 'user-2', // Priya Sundaram (Senior Mentor)
-    author: mockUsers[1],
+    authorSnapshot: mockUsers[1],
     content: `Kalman filtering estimates the true state of a dynamic system by recursively minimizing the mean squared error between model predictions and noisy physical measurements.
 
 ### The Core Two-Step Cycle:
@@ -102,7 +102,7 @@ public:
     id: 'ans-2',
     doubtId: 'doubt-1',
     authorId: 'user-5',
-    author: mockUsers[4], // Karthik Raj
+    authorSnapshot: mockUsers[4], // Karthik Raj
     content: `For line followers on ESP32, also consider comparing your Kalman implementation with a **Complementary Filter** if CPU cycles are tight:
 \`angle = 0.98 * (angle + gyro * dt) + 0.02 * (accAngle);\`
 While Kalman handles dynamic variance tracking, a complementary filter runs in 3 arithmetic ops if floating point division causes loop jitter in your FreeRTOS 1kHz task.`,
@@ -116,7 +116,7 @@ While Kalman handles dynamic variance tracking, a complementary filter runs in 3
     id: 'ans-3',
     doubtId: 'doubt-1',
     authorId: 'user-6',
-    author: mockUsers[5],
+    authorSnapshot: mockUsers[5],
     content: `A tip regarding tuning $Q$ and $R$: Keep the robot stationary on the bench for 10 seconds. Calculate the variance of your raw accelerometer readings — that directly becomes your empirical $R$. Then manually adjust $Q$ until the filter tracks abrupt hand tilt without lagging behind.`,
     createdAt: '40 mins ago',
     upvotes: 9,
@@ -130,7 +130,7 @@ While Kalman handles dynamic variance tracking, a complementary filter runs in 3
     id: 'ans-4',
     doubtId: 'doubt-2',
     authorId: 'user-1', // Rahul Sharma
-    author: mockUsers[0],
+    authorSnapshot: mockUsers[0],
     content: `Hi Ananya! Welcome to C pointers. The reason your original code crashed is that \`int **matrix = malloc(rows * sizeof(int*))\` only allocates an array of pointer addresses, **not** the integer slots themselves!
 
 ### The Two Approaches:
@@ -192,7 +192,7 @@ int main() {
     id: 'ans-5',
     doubtId: 'doubt-2',
     authorId: 'user-3', // Dr. Ramesh Kumar
-    author: mockUsers[2],
+    authorSnapshot: mockUsers[2],
     content: `Also pay attention to compiler diagnostics: compiling with \`gcc -Wall -Wextra -fsanitize=address -g main.c\` will give you AddressSanitizer output that points directly to the line causing heap-use-after-free or invalid pointer dereference!`,
     createdAt: '2 hours ago',
     upvotes: 19,
@@ -206,7 +206,7 @@ int main() {
     id: 'ans-6',
     doubtId: 'doubt-3',
     authorId: 'user-2', // Priya Sundaram
-    author: mockUsers[1],
+    authorSnapshot: mockUsers[1],
     content: `Karthik, for your ESP32-WROOM-32D node:
 1. Always enable the ESP-IDF hardware cryptographic accelerator for AES-128 GCM. It runs via dedicated silicon DMA channels and executes a 256-byte payload in under 42 microseconds, completely avoiding telemetry loop stalls.
 2. For key rotation, do NOT invoke TLS handshakes inside the high-rate FreeRTOS timer. Instead, spawn a dedicated low-priority Worker Task pinned to Core 0 that exchanges elliptic curve Diffie-Hellman keys every 2 hours, and then posts the new AES symmetric session key into an atomic pointer or FreeRTOS Queue.`,
@@ -231,7 +231,7 @@ int main() {
     id: 'ans-7',
     doubtId: 'doubt-4',
     authorId: 'user-2', // Priya Sundaram
-    author: mockUsers[1],
+    authorSnapshot: mockUsers[1],
     content: `Yes, in FreeRTOS, \`xSemaphoreCreateMutex()\` **automatically implements Priority Inheritance**!
 
 When your Priority 1 Logging Task acquires the mutex, and Priority 5 Sensor Task blocks on that same mutex:
@@ -268,7 +268,7 @@ void SensorTask(void *pvParameters) {
     id: 'ans-8',
     doubtId: 'doubt-5',
     authorId: 'user-7', // Divya Narayanan
-    author: mockUsers[6],
+    authorSnapshot: mockUsers[6],
     content: `Here is why B+ Trees are universally preferred over B-Trees for database disk storage:
 
 1. **Higher Branching Factor (Fanout)**:
@@ -291,7 +291,7 @@ void SensorTask(void *pvParameters) {
     id: 'ans-9',
     doubtId: 'doubt-6',
     authorId: 'user-3', // Dr. Ramesh Kumar
-    author: mockUsers[2],
+    authorSnapshot: mockUsers[2],
     content: `In the Linux network stack, RFC 6298 states:
 "The initial RTO should be set to 1 second." However, historical implementations used 3.0 seconds, and the Linux kernel parameter \`tcp_syn_retries\` still defaults the initial SYN timeout to 1s in modern kernels, or 3s if legacy sysctl configurations exist.
 
@@ -314,7 +314,7 @@ You can inspect your system's initial RTO using:
     id: 'ans-10',
     doubtId: 'doubt-7',
     authorId: 'user-6', // Naveen Venkatesh
-    author: mockUsers[5],
+    authorSnapshot: mockUsers[5],
     content: `Think of your multidimensional data points as an elliptical cloud in space:
 
 1. **The Eigenvectors**:
@@ -345,7 +345,7 @@ You can inspect your system's initial RTO using:
     id: 'ans-11',
     doubtId: 'doubt-8',
     authorId: 'user-1', // Rahul Sharma
-    author: mockUsers[0],
+    authorSnapshot: mockUsers[0],
     content: `Belady's Anomaly happens in FIFO because FIFO does not account for the recency or frequency of page references — it blindly kicks out whatever page entered memory first.
 
 ### Why LRU is immune (The Stack Algorithm Property):
@@ -365,7 +365,7 @@ Under LRU, the $m$ pages kept in memory are always the $m$ most recently used pa
     id: 'ans-12',
     doubtId: 'doubt-10',
     authorId: 'user-15', // Aishwarya Mohan (Placed at Amazon)
-    author: mockUsers[14],
+    authorSnapshot: mockUsers[14],
     content: `Great question! This is a classic Amazon SDE-1 question.
 
 ### Why Union-Find fails on Directed Graphs:
@@ -422,7 +422,7 @@ A cycle exists if and only if during DFS you encounter a neighbor that is curren
     id: 'ans-13',
     doubtId: 'doubt-15',
     authorId: 'user-23', // Aditya Gupta
-    author: mockUsers[22],
+    authorSnapshot: mockUsers[22],
     content: `In Patience Sorting, we maintain an array \`tails\`, where \`tails[i]\` stores the smallest tail of all increasing subsequences of length $i+1$ found so far.
 
 Because \`tails\` is always strictly sorted, for each number $x$ in the input:
@@ -443,7 +443,7 @@ Replacing an element does not change the maximum length already achieved, but it
     id: 'ans-14',
     doubtId: 'doubt-20',
     authorId: 'user-15', // Aishwarya Mohan
-    author: mockUsers[14],
+    authorSnapshot: mockUsers[14],
     content: `When answering behavioral questions at Microsoft/Amazon, follow the **STAR Framework**:
 
 1. **Situation**: 2 sentences context (e.g. "During our 6th-sem Capstone project with 4 teammates, we were 3 weeks away from demo day...").
@@ -468,7 +468,7 @@ for (let i = 16; i <= 50; i++) {
     id: `ans-gen-${i}`,
     doubtId: doubtId,
     authorId: mockUsers[authorIndex].id,
-    author: mockUsers[authorIndex],
+    authorSnapshot: mockUsers[authorIndex],
     content: `Detailed academic solution for Question ${i}:
 
 When analyzing this problem, the primary principle is to isolate the theoretical boundary conditions before applying system optimizations.
@@ -500,7 +500,7 @@ Refer to Standard Engineering Textbook (Tanenbaum / Cormen / Sedgewick) Chapter 
     id: `ans-gen-alt-${i}`,
     doubtId: doubtId,
     authorId: mockUsers[(authorIndex + 3) % 25].id,
-    author: mockUsers[(authorIndex + 3) % 25],
+    authorSnapshot: mockUsers[(authorIndex + 3) % 25],
     content: `Alternative perspective on Doubt ${i}: You can also solve this via iterative simulation rather than closed-form analytical derivation. In practice on embedded or constrained microcontrollers, this approach requires significantly less stack overhead.`,
     createdAt: `${(i % 12) + 2} days ago`,
     upvotes: 7 + (i % 12),

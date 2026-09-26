@@ -22,6 +22,8 @@ import { useApp } from '../../context/AppContext';
 export const Sidebar: React.FC = () => {
   const { currentUser, unreadNotificationsCount } = useApp();
 
+  if (!currentUser) return null;
+
   const primaryLinks = [
     { to: '/app', label: 'Home Feed', icon: Home, end: true },
     { to: '/app/explore', label: 'Explore Doubts', icon: Compass },

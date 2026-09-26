@@ -6,6 +6,8 @@ import { useApp } from '../../context/AppContext';
 export const MobileNav: React.FC = () => {
   const { currentUser, unreadNotificationsCount } = useApp();
 
+  if (!currentUser) return null;
+
   return (
     <nav className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 border-t border-slate-800/90 backdrop-blur-xl px-2 py-1.5 safe-area-pb">
       <div className="flex items-center justify-around">

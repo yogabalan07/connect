@@ -59,10 +59,14 @@ export const QuickSearchModal: React.FC<QuickSearchModalProps> = ({ isOpen, onCl
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             onClick={onClose}
+            aria-hidden="true"
             className="fixed inset-0 bg-slate-950/80 backdrop-blur-md"
           />
 
           <motion.div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Quick search"
             initial={{ opacity: 0, scale: 0.96, y: -10 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.96, y: -10 }}
@@ -77,11 +81,17 @@ export const QuickSearchModal: React.FC<QuickSearchModalProps> = ({ isOpen, onCl
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 placeholder="Search doubts, users, tags, subjects..."
+                aria-label="Search doubts, users, tags, subjects"
                 className="w-full bg-transparent text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none"
               />
               {query && (
-                <button onClick={() => setQuery('')} className="text-slate-500 hover:text-slate-300">
-                  <X className="w-4 h-4" />
+                <button
+                  type="button"
+                  onClick={() => setQuery('')}
+                  aria-label="Clear search"
+                  className="text-slate-500 hover:text-slate-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded"
+                >
+                  <X className="w-4 h-4" aria-hidden="true" />
                 </button>
               )}
               <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-400">
@@ -109,7 +119,7 @@ export const QuickSearchModal: React.FC<QuickSearchModalProps> = ({ isOpen, onCl
                             {d.title}
                           </div>
                           <div className="text-[11px] text-slate-400 flex items-center gap-2 mt-0.5">
-                            <span>{d.author.name}</span>
+                            <span>{d.authorSnapshot.name}</span>
                             <span>·</span>
                             <span>{d.category}</span>
                             <span>·</span>

@@ -5,6 +5,8 @@ import { useApp } from '../../context/AppContext';
 export const ReputationPage: React.FC = () => {
   const { currentUser } = useApp();
 
+  if (!currentUser) return null;
+
   const tiers = [
     { name: 'Bronze', threshold: '100+ points', desc: 'Active student asking and answering questions.' },
     { name: 'Silver', threshold: '500+ points', desc: 'Frequent solver with at least 5 accepted solutions.' },

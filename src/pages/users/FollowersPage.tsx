@@ -6,6 +6,8 @@ import { UserCard } from '../../components/cards/UserCard';
 export const FollowersPage: React.FC = () => {
   const { users, currentUser } = useApp();
 
+  if (!currentUser) return null;
+
   // Show peers who follow current user
   const followerUsers = users.filter(u => u.id !== currentUser.id && u.status === 'active').slice(0, 9);
 

@@ -2,40 +2,41 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { GraduationCap, Lock, Mail, ArrowRight, ShieldCheck, KeyRound } from 'lucide-react';
+import { useAuth } from '../../hooks/useAuth';
 import { useApp } from '../../context/AppContext';
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
-  const { login, addToast } = useApp();
+  const { login, switchDevPersona } = useAuth();
+  const { addToast } = useApp();
 
-  const [email, setEmail] = useState('student@example.com');
-  const [password, setPassword] = useState('password123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setIsLoading(true);
 
-    setTimeout(() => {
-      const res = login(email, password);
-      setIsLoading(false);
-      if (res.success) {
-        navigate('/app');
-      } else {
-        setError(res.message || 'Login failed.');
-      }
-    }, 400);
+    const res = await login(email, password);
+    setIsLoading(false);
+
+    if (res.ok) {
+      // Guards route non-active accounts to their status screen automatically.
+      navigate('/app', { replace: true });
+    } else {
+      setError(res.message);
+    }
   };
 
-  const handleQuickDemo = (type: 'student' | 'admin') => {
-    if (type === 'student') {
-      setEmail('student@example.com');
-      setPassword('password123');
-    } else {
-      setEmail('admin@example.com');
-      setPassword('admin123');
+  const handleDevPersona = (role: 'student' | 'admin') => {
+    try {
+      switchDevPersona(role);
+      navigate('/app', { replace: true });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Dev sign-in failed.');
     }
   };
 
@@ -97,29 +98,31 @@ export const LoginPage: React.FC = () => {
             </p>
           </div>
 
-          {/* Quick Demo Fill Buttons */}
-          <div className="p-3 rounded-xl bg-slate-900/90 border border-slate-800 text-xs space-y-2">
-            <div className="text-[11px] font-semibold text-indigo-400 flex items-center gap-1.5">
-              <KeyRound className="w-3.5 h-3.5" />
-              <span>One-Click Demo Accounts</span>
+          {/* DEV-ONLY personas: no passwords in source, hidden in production builds */}
+          {import.meta.env.DEV && (
+            <div className="p-3 rounded-xl bg-slate-900/90 border border-dashed border-purple-800/60 text-xs space-y-2">
+              <div className="text-[11px] font-semibold text-purple-400 flex items-center gap-1.5">
+                <KeyRound className="w-3.5 h-3.5" />
+                <span>Development Only — persona switch (no passwords)</span>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleDevPersona('student')}
+                  className="flex-1 py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700/80 text-[11px] font-medium text-slate-300 border border-slate-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
+                >
+                  Student persona
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDevPersona('admin')}
+                  className="flex-1 py-1.5 px-2.5 rounded-lg bg-purple-900/30 hover:bg-purple-900/50 text-[11px] font-medium text-purple-300 border border-purple-800/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
+                >
+                  Admin persona
+                </button>
+              </div>
             </div>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => handleQuickDemo('student')}
-                className="flex-1 py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700/80 text-[11px] font-medium text-slate-300 border border-slate-700 transition-colors"
-              >
-                Student Demo
-              </button>
-              <button
-                type="button"
-                onClick={() => handleQuickDemo('admin')}
-                className="flex-1 py-1.5 px-2.5 rounded-lg bg-purple-900/30 hover:bg-purple-900/50 text-[11px] font-medium text-purple-300 border border-purple-800/60 transition-colors"
-              >
-                Admin Demo
-              </button>
-            </div>
-          </div>
+          )}
 
           {error && (
             <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 font-medium">
@@ -129,14 +132,12 @@ export const LoginPage: React.FC = () => {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="text-xs font-semibold text-slate-300 block mb-1.5">
+              <label htmlFor="login-email" className="text-xs font-semibold text-slate-300 block mb-1.5">
                 College Email
               </label>
               <div className="relative">
                 <Mail className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
-                <input
-                  type="email"
-                  required
+                <input id="login-email" type="email" required
                   value={email}
                   onChange={e => setEmail(e.target.value)}
                   placeholder="student@example.com"
@@ -147,7 +148,7 @@ export const LoginPage: React.FC = () => {
 
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-semibold text-slate-300">Password</label>
+                <label htmlFor="login-password" className="text-xs font-semibold text-slate-300">Password</label>
                 <Link
                   to="/forgot-password"
                   className="text-[11px] text-indigo-400 hover:underline"
@@ -157,9 +158,7 @@ export const LoginPage: React.FC = () => {
               </div>
               <div className="relative">
                 <Lock className="w-4 h-4 text-slate-500 absolute left-3.5 top-3" />
-                <input
-                  type="password"
-                  required
+                <input id="login-password" type="password" required
                   value={password}
                   onChange={e => setPassword(e.target.value)}
                   placeholder="••••••••"
@@ -189,11 +188,13 @@ export const LoginPage: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => {
-              login('student@example.com', 'password123');
-              navigate('/app');
-            }}
-            className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-slate-200 transition-colors flex items-center justify-center gap-2.5"
+            onClick={() =>
+              addToast(
+                'Google Workspace sign-in arrives with Firebase Authentication in the backend phase.',
+                'info'
+              )
+            }
+            className="w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-xs font-semibold text-slate-200 transition-colors flex items-center justify-center gap-2.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
           >
             <svg className="w-4 h-4" viewBox="0 0 24 24">
               <path

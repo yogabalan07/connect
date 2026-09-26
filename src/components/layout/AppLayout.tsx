@@ -1,16 +1,14 @@
 import React from 'react';
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom';
 import { Navbar } from './Navbar';
 import { Sidebar } from './Sidebar';
 import { RightSidebar } from './RightSidebar';
 import { MobileNav } from './MobileNav';
-import { ToastContainer } from '../ui/ToastContainer';
 
-interface AppLayoutProps {
-  hideRightSidebar?: boolean;
-}
-
-export const AppLayout: React.FC<AppLayoutProps> = ({ hideRightSidebar = false }) => {
+export const AppLayout: React.FC = () => {
+  const { pathname } = useLocation();
+  // Messages is a full-width surface: drop the right widget column for it.
+  const hideRightSidebar = pathname.startsWith('/app/messages');
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col antialiased selection:bg-indigo-500/30 selection:text-indigo-200">
       {/* Top Navbar */}
@@ -32,9 +30,6 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ hideRightSidebar = false }
 
       {/* Mobile Bottom Navigation */}
       <MobileNav />
-
-      {/* Global Toast Notifications */}
-      <ToastContainer />
     </div>
   );
 };

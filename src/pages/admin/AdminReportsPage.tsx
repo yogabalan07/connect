@@ -68,7 +68,11 @@ export const AdminReportsPage: React.FC = () => {
                     {r.status === 'pending' ? (
                       <>
                         <button
-                          onClick={() => deleteReportedContent(r.id)}
+                          onClick={() => {
+                            if (window.confirm('Delete the reported content and resolve this report?')) {
+                              deleteReportedContent(r.id);
+                            }
+                          }}
                           className="px-2.5 py-1 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-semibold text-[11px]"
                           title="Delete content and resolve report"
                         >

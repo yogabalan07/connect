@@ -7,7 +7,7 @@ export const mockDoubts: Doubt[] = [
     title: 'How does a Kalman Filter work in robotics and noisy IMU sensor fusion?',
     description: 'We are building an autonomous line-follower with an MPU6050 accelerometer and gyroscope. The raw accelerometer data is prone to severe motor vibration noise, while the gyro angle drifts over time. I understand there is a Predict step and an Update step with Kalman Gain, but I am confused how the covariance matrices Q and R affect the state estimate. Can someone provide an intuitive explanation with a minimal C/C++ code snippet?',
     authorId: 'user-1',
-    author: mockUsers[0], // Rahul Sharma
+    authorSnapshot: mockUsers[0], // Rahul Sharma
     createdAt: '2 hours ago',
     category: 'Embedded Systems & IoT',
     subject: 'Robotics & Control Systems',
@@ -50,7 +50,7 @@ struct KalmanFilter1D {
     title: 'Understanding segmentation fault in C pointer arithmetic with 2D dynamically allocated arrays',
     description: 'In our 3rd-semester OS lab assignment, we need to allocate a dynamic matrix using malloc. When accessing `matrix[i][j]` inside nested loops, my program crashes with `SIGSEGV: segmentation fault (core dumped)`. Why does `int **arr = malloc(rows * sizeof(int*))` require separate allocations for each row, and how can we allocate a contiguous block in one single malloc call?',
     authorId: 'user-11',
-    author: mockUsers[10], // Ananya Iyer (Freshman)
+    authorSnapshot: mockUsers[10], // Ananya Iyer (Freshman)
     createdAt: '4 hours ago',
     category: 'Data Structures & Algorithms',
     subject: 'Data Structures & C Programming',
@@ -84,7 +84,7 @@ int main() {
     title: '🔒 Private Doubt: Final Year Capstone Smart Grid telemetry security and token encryption',
     description: 'Hey Priya senior, this is for our confidential Smart Grid capstone project with Texas Instruments. We need advice on AES-128 GCM hardware acceleration on ESP32 vs software ChaCha20-Poly1305. How should we structure the key rotation without blocking the main telemetry loop?',
     authorId: 'user-5',
-    author: mockUsers[4], // Karthik Raj
+    authorSnapshot: mockUsers[4], // Karthik Raj
     createdAt: '6 hours ago',
     category: 'Embedded Systems & IoT',
     subject: 'Capstone Project - Smart Grid',
@@ -103,7 +103,7 @@ int main() {
     title: 'ESP32 FreeRTOS: Priority inversion between UART telemetry task and sensor read task',
     description: 'We have a high-priority Sensor Task (priority 5) and a low-priority Logging Task (priority 1) sharing an SPI mutex. When a medium priority WiFi Task (priority 3) wakes up, it preempts the logging task while it holds the SPI mutex, stalling our high-priority task for over 150ms! Does FreeRTOS mutex support priority inheritance by default, or should we use binary semaphores with custom priority inheritance?',
     authorId: 'user-5',
-    author: mockUsers[4], // Karthik Raj
+    authorSnapshot: mockUsers[4], // Karthik Raj
     createdAt: '1 day ago',
     category: 'Embedded Systems & IoT',
     subject: 'Embedded Real-Time Operating Systems',
@@ -120,7 +120,7 @@ int main() {
     title: 'Difference between B-Tree and B+ Tree indexing in PostgreSQL relational engine',
     description: 'During our Database Systems exam review, the professor emphasized why DBMS storage engines like PostgreSQL and InnoDB use B+ Trees rather than standard B-Trees for disk-based indexes. Why is having all record pointers exclusively in the leaf nodes, chained in a doubly linked list, so much more efficient for range scans (e.g. `BETWEEN 100 AND 500`)?',
     authorId: 'user-7',
-    author: mockUsers[6], // Divya Narayanan
+    authorSnapshot: mockUsers[6], // Divya Narayanan
     createdAt: '1 day ago',
     category: 'Database Systems & SQL',
     subject: 'Database Management Systems',
@@ -137,7 +137,7 @@ int main() {
     title: 'Why does TCP SYN retransmission backoff cause 3-second delay on campus Wi-Fi?',
     description: 'When initiating an HTTP connection on the hostel subnet, Wireshark captures show an initial SYN packet going unanswered, followed by an exact 3.00-second pause before the first retransmission. Is this RFC 6298 standard initial RTO (Retransmission Timeout) of 1s or 3s in Linux kernel network stacks?',
     authorId: 'user-12',
-    author: mockUsers[11], // Rohit Verma
+    authorSnapshot: mockUsers[11], // Rohit Verma
     createdAt: '2 days ago',
     category: 'Computer Networks',
     subject: 'Computer Communication Networks',
@@ -154,7 +154,7 @@ int main() {
     title: 'Intuitive geometric interpretation of Eigenvalues and Eigenvectors in Principal Component Analysis',
     description: 'I understand the algebraic formula Av = λv, where matrix multiplication simply scales vector v without changing its direction. But in PCA, how does finding the eigenvectors of the data covariance matrix maximize the variance along orthogonal projection axes? Can someone explain the transformation geometry without dense linear algebra proofs?',
     authorId: 'user-9',
-    author: mockUsers[8], // Sneha Krishnan
+    authorSnapshot: mockUsers[8], // Sneha Krishnan
     createdAt: '2 days ago',
     category: 'Engineering Mathematics',
     subject: 'Applied Linear Algebra & Statistics',
@@ -171,7 +171,7 @@ int main() {
     title: 'Belady\'s Anomaly in Operating Systems: Why does FIFO suffer from it while LRU never does?',
     description: 'Belady\'s anomaly proves that adding more page frames can paradoxically increase the number of page faults under FIFO page replacement. Why is LRU classified as a "Stack Algorithm" that guarantees inclusion property ($S(t, n) \\subset S(t, n+1)$), making Belady\'s anomaly mathematically impossible?',
     authorId: 'user-4',
-    author: mockUsers[3], // Arun Kumar
+    authorSnapshot: mockUsers[3], // Arun Kumar
     createdAt: '3 days ago',
     category: 'Operating Systems & Concurrency',
     subject: 'Operating Systems',
@@ -188,7 +188,7 @@ int main() {
     title: 'How to calculate setup and hold time violations in sequential digital circuits (Verilog/FPGA)?',
     description: 'We are designing an FPGA pipeline running at 100MHz clock (10ns period). If $T_{cq} = 2\\text{ns}$, $T_{comb} = 7\\text{ns}$, and $T_{setup} = 2.5\\text{ns}$, the total path delay is $11.5\\text{ns} > 10\\text{ns}$, creating a setup violation. How do clock skew and jitter influence the slack margin, and what is the standard fix in RTL synthesis?',
     authorId: 'user-14',
-    author: mockUsers[13], // Sai Teja
+    authorSnapshot: mockUsers[13], // Sai Teja
     createdAt: '3 days ago',
     category: 'VLSI & Digital Electronics',
     subject: 'Digital System Design & VLSI',
@@ -205,7 +205,7 @@ int main() {
     title: 'Amazon SDE Interview: Optimizing Graph cycle detection in Directed vs Undirected graphs',
     description: 'In yesterday\'s online assessment round, there was a problem requiring cycle detection in a graph with 200,000 nodes. For undirected graphs, Union-Find with path compression works in nearly $O(V + E \\cdot \\alpha(V))$, but for directed graphs we need 3-color DFS (WHITE, GRAY, BLACK). Why does Union-Find fail on directed graphs, and how do we reconstruct the actual cycle path?',
     authorId: 'user-15',
-    author: mockUsers[14], // Aishwarya Mohan
+    authorSnapshot: mockUsers[14], // Aishwarya Mohan
     createdAt: '4 days ago',
     category: 'Placements & Coding Tests',
     subject: 'Campus Placement Prep',
@@ -222,7 +222,7 @@ int main() {
     title: 'Fast Fourier Transform (FFT) Decimation-in-Time bit reversal permutation algorithm',
     description: 'In radix-2 Cooley-Tukey FFT, the input array indices must be rearranged in bit-reversed order (e.g. for N=8, index 1 (001) becomes 4 (100)). Is there an efficient bitwise swap algorithm in C to do this in-place without generating a lookup table?',
     authorId: 'user-14',
-    author: mockUsers[13], // Sai Teja
+    authorSnapshot: mockUsers[13], // Sai Teja
     createdAt: '4 days ago',
     category: 'Digital Signal Processing',
     subject: 'Digital Signal Processing',
@@ -239,7 +239,7 @@ int main() {
     title: '🔒 Private Doubt: Feedback on preliminary M.Tech research proposal on Photovoltaic Inverter topology',
     description: 'Dr. Shalini, I have drafted the preliminary block diagram for the 3-phase multilevel inverter with reduced switch count. Could you review the THD comparison table before I submit the progress report to the committee?',
     authorId: 'user-22',
-    author: mockUsers[21], // Bhavna Menon
+    authorSnapshot: mockUsers[21], // Bhavna Menon
     createdAt: '5 days ago',
     category: 'Engineering Mathematics',
     subject: 'Power Electronics Research',
@@ -257,7 +257,7 @@ int main() {
     title: 'Docker multi-stage builds: Reducing Node.js production image size from 1.2GB to 85MB',
     description: 'Our team\'s capstone deployment uses a standard `node:20` base image, and after `npm install`, the built Docker image is 1.2 GB! How do we configure multi-stage builds using `node:20-alpine`, copying only compiled dist and production dependencies, while pruning devDependencies?',
     authorId: 'user-30',
-    author: mockUsers[29], // Mohit Agarwal
+    authorSnapshot: mockUsers[29], // Mohit Agarwal
     createdAt: '5 days ago',
     category: 'Cloud Computing & DevOps',
     subject: 'DevOps & Cloud Architecture',
@@ -274,7 +274,7 @@ int main() {
     title: 'Deadlock avoidance vs Deadlock prevention: How does Banker\'s Algorithm enforce safe state?',
     description: 'In OS theory, what is the exact computational difference between prevention (denying mutual exclusion, hold-and-wait, no preemption, circular wait) and avoidance via Banker\'s Algorithm? Does Banker\'s Algorithm have an $O(m \\cdot n^2)$ complexity, and is it ever used in real operating systems kernels?',
     authorId: 'user-1',
-    author: mockUsers[0],
+    authorSnapshot: mockUsers[0],
     createdAt: '6 days ago',
     category: 'Operating Systems & Concurrency',
     subject: 'Operating Systems',
@@ -291,7 +291,7 @@ int main() {
     title: 'Dynamic Programming: Longest Increasing Subsequence in O(N log N) using Patience Sorting',
     description: 'The standard $O(N^2)$ DP is straightforward: `dp[i] = 1 + max(dp[j])`. But how does maintaining a tails array with binary search (Patience Sorting) achieve $O(N \\log N)$? Why does the tails array not necessarily represent the actual subsequence elements, yet always guarantees correct length?',
     authorId: 'user-23',
-    author: mockUsers[22], // Aditya Gupta
+    authorSnapshot: mockUsers[22], // Aditya Gupta
     createdAt: '6 days ago',
     category: 'Data Structures & Algorithms',
     subject: 'Advanced Algorithms',
@@ -308,7 +308,7 @@ int main() {
     title: 'Zero-crossing detection circuit design for 230V AC fan speed regulation via Triac',
     description: 'We are designing an IoT ceiling fan regulator using an ESP32. We need a clean 3.3V digital interrupt pulse whenever the AC 230V 50Hz mains wave crosses zero volts. Should we use an H11AA1 bidirectional optocoupler or a bridge rectifier with an EL817?',
     authorId: 'user-10',
-    author: mockUsers[9], // Vikram Aditya
+    authorSnapshot: mockUsers[9], // Vikram Aditya
     createdAt: '1 week ago',
     category: 'Embedded Systems & IoT',
     subject: 'Power Electronics & Microcontrollers',
@@ -325,7 +325,7 @@ int main() {
     title: 'How does React 19 Action hook useActionState differ from useTransition with form submissions?',
     description: 'With modern React, handling pending states, optimistic updates, and form resets has shifted away from manual `useState` boolean flags. When should we prefer `useActionState` over raw `useTransition`, and how do we gracefully handle server validation errors?',
     authorId: 'user-4',
-    author: mockUsers[3], // Arun Kumar
+    authorSnapshot: mockUsers[3], // Arun Kumar
     createdAt: '1 week ago',
     category: 'Web & Fullstack Engineering',
     subject: 'Full Stack Web Development',
@@ -342,7 +342,7 @@ int main() {
     title: 'Finite Element Analysis (FEA): Meshing convergence criteria in ANSYS for stress concentration',
     description: 'When applying FEA on a notched tensile plate, increasing the mesh density near the fillet causes the peak von Mises stress to climb with every refinement step. How can I differentiate between true numerical convergence and a mathematical stress singularity?',
     authorId: 'user-8',
-    author: mockUsers[7], // Harish Chandra
+    authorSnapshot: mockUsers[7], // Harish Chandra
     createdAt: '1 week ago',
     category: 'Mechanical CAD & FEA',
     subject: 'Finite Element Analysis',
@@ -359,7 +359,7 @@ int main() {
     title: 'Why do database transactions use Two-Phase Locking (2PL) vs Two-Phase Commit (2PC)?',
     description: 'Students frequently confuse 2PL and 2PC in DBMS and Distributed Systems exams. Could a senior give a crisp summary comparing what guarantee each protocol provides, and whether 2PL prevents deadlocks?',
     authorId: 'user-7',
-    author: mockUsers[6], // Divya Narayanan
+    authorSnapshot: mockUsers[6], // Divya Narayanan
     createdAt: '1 week ago',
     category: 'Database Systems & SQL',
     subject: 'Database Systems & Concurrency',
@@ -376,7 +376,7 @@ int main() {
     title: 'Placement Tips: How to prepare for behavioral rounds (STAR Method) for top tier tech firms?',
     description: 'I cleared the technical coding rounds for Microsoft and Cisco, but I have always felt underprepared for questions like "Tell me about a time you had a technical disagreement with a team member." How should engineering students structure project stories without sounding fake?',
     authorId: 'user-12',
-    author: mockUsers[11], // Rohit Verma
+    authorSnapshot: mockUsers[11], // Rohit Verma
     createdAt: '1 week ago',
     category: 'Placements & Coding Tests',
     subject: 'Campus Career Guidance',
@@ -393,7 +393,7 @@ int main() {
     title: 'Converting NFA to DFA using Subset Construction algorithm: Step-by-step example with epsilon transitions',
     description: 'In Theory of Computation, when calculating $\\epsilon$-closure of states in a Nondeterministic Finite Automaton, does the closure include the initial state itself? And what happens to dead states?',
     authorId: 'user-11',
-    author: mockUsers[10], // Ananya Iyer
+    authorSnapshot: mockUsers[10], // Ananya Iyer
     createdAt: '1 week ago',
     category: 'Data Structures & Algorithms',
     subject: 'Theory of Computation',
@@ -410,7 +410,7 @@ int main() {
     title: '🔒 Private Doubt: Hardware debugger JTAG pins connection conflict with SD card SPI bus',
     description: 'Priya senior, we have PCB rev 1.2 in hand. Pin GPIO14 is shared between JTAG TMS and SD Card CS line. Can we flash firmware without disconnecting the SD card socket or should we cut the trace?',
     authorId: 'user-5',
-    author: mockUsers[4],
+    authorSnapshot: mockUsers[4],
     createdAt: '2 weeks ago',
     category: 'Embedded Systems & IoT',
     subject: 'PCB Debugging Lab',
@@ -428,7 +428,7 @@ int main() {
     title: 'How does Backpropagation calculate gradients across multi-layer perceptron layers with chain rule?',
     description: 'Can someone walk through the exact mathematical derivation of $\\frac{\\partial L}{\\partial W^{(l)}}$ using the Jacobian matrix and element-wise Hadamard product $\\odot$ for sigmoid/ReLU activations?',
     authorId: 'user-6',
-    author: mockUsers[5], // Naveen Venkatesh
+    authorSnapshot: mockUsers[5], // Naveen Venkatesh
     createdAt: '2 weeks ago',
     category: 'Machine Learning & AI',
     subject: 'Neural Networks & Deep Learning',
@@ -445,7 +445,7 @@ int main() {
     title: 'Solving recurrence relation T(n) = 2T(n/2) + n/log(n) using Master Theorem or Recursion Tree?',
     description: 'Why can we not directly apply Case 2 of the standard Master Theorem here, since $f(n) = n / \\log(n)$ is asymptotically smaller than $n^{\\log_2 2} = n$? What is the correct extended Master Theorem case?',
     authorId: 'user-23',
-    author: mockUsers[22],
+    authorSnapshot: mockUsers[22],
     createdAt: '2 weeks ago',
     category: 'Data Structures & Algorithms',
     subject: 'Analysis of Algorithms',
@@ -462,7 +462,7 @@ int main() {
     title: 'STAAD.Pro analysis: Calculating bending moments and shear forces for simply supported T-beam with UDL',
     description: 'In our 6th semester Structural Analysis project, the automated STAAD results show higher support reactions than manual calculations using IS 456:2000. How does member self-weight factor into STAAD load combinations?',
     authorId: 'user-13',
-    author: mockUsers[12], // Pooja R
+    authorSnapshot: mockUsers[12], // Pooja R
     createdAt: '2 weeks ago',
     category: 'Civil & Structural Design',
     subject: 'Design of Reinforced Concrete Structures',
@@ -483,7 +483,7 @@ const moreDoubts: Doubt[] = [
     title: 'How does Redis achieve single-threaded ultra high throughput using I/O multiplexing epoll?',
     description: 'Redis is famously single-threaded for command execution yet serves 100k+ requests per second. How does the event loop with epoll/kqueue prevent slow network clients from stalling the database engine?',
     authorId: 'user-1',
-    author: mockUsers[0],
+    authorSnapshot: mockUsers[0],
     createdAt: '2 weeks ago',
     category: 'Database Systems & SQL',
     subject: 'Database Systems & Cache Architecture',
@@ -500,7 +500,7 @@ const moreDoubts: Doubt[] = [
     title: 'Git Rebase vs Git Merge: Best practices for team repositories during hackathons',
     description: 'When working on multi-member git branches, when should we use `git pull --rebase origin main` instead of regular merge commits? How to resolve conflicts cleanly without destroying commit history?',
     authorId: 'user-25',
-    author: mockUsers[24],
+    authorSnapshot: mockUsers[24],
     createdAt: '2 weeks ago',
     category: 'Hackathons & Capstone Projects',
     subject: 'Software Engineering & Version Control',
@@ -517,7 +517,7 @@ const moreDoubts: Doubt[] = [
     title: 'Difference between L1, L2, and ElasticNet regularization in regression models',
     description: 'Why does L1 regularization (Lasso) drive coefficients exactly to zero inducing sparsity, whereas L2 (Ridge) only shrinks them toward zero asymptotically? What is the contour geometry explanation?',
     authorId: 'user-9',
-    author: mockUsers[8],
+    authorSnapshot: mockUsers[8],
     createdAt: '3 weeks ago',
     category: 'Machine Learning & AI',
     subject: 'Machine Learning Fundamentals',
@@ -534,7 +534,7 @@ const moreDoubts: Doubt[] = [
     title: 'ARM Cortex-M Interrupt latency and tail-chaining mechanism explained',
     description: 'How does ARM Cortex-M hardware stacking and tail-chaining allow instantaneous execution of a pending ISR without popping and pushing CPU registers back to the stack?',
     authorId: 'user-2',
-    author: mockUsers[1],
+    authorSnapshot: mockUsers[1],
     createdAt: '3 weeks ago',
     category: 'Embedded Systems & IoT',
     subject: 'Microprocessor & Microcontroller Architecture',
@@ -551,7 +551,7 @@ const moreDoubts: Doubt[] = [
     title: 'Spring Boot @Transactional: Why does calling method from the same class bypass the proxy?',
     description: 'When a method annotated with `@Transactional` is invoked by another method within the same service class, rollback on RuntimeException does not happen. How does Spring AOP dynamic proxying cause this?',
     authorId: 'user-4',
-    author: mockUsers[3],
+    authorSnapshot: mockUsers[3],
     createdAt: '3 weeks ago',
     category: 'Web & Fullstack Engineering',
     subject: 'Enterprise Java Frameworks',
@@ -568,7 +568,7 @@ const moreDoubts: Doubt[] = [
     title: 'Understanding Huffman Coding entropy and prefix-free optimal code tree construction',
     description: 'Why is greedy choice property guaranteed to yield minimum weighted path length in Huffman trees? How do priority queues achieve $O(n \\log n)$ time for building the tree?',
     authorId: 'user-11',
-    author: mockUsers[10],
+    authorSnapshot: mockUsers[10],
     createdAt: '3 weeks ago',
     category: 'Data Structures & Algorithms',
     subject: 'Design & Analysis of Algorithms',
@@ -585,7 +585,7 @@ const moreDoubts: Doubt[] = [
     title: 'Subnetting Cheat Sheet: Calculating Network ID, Broadcast ID, and Valid Host Ranges for /27',
     description: 'In a class C network `192.168.10.0/27`, what is the block size, how many subnets are formed, and what are the valid host IP ranges for the 3rd subnet?',
     authorId: 'user-25',
-    author: mockUsers[24],
+    authorSnapshot: mockUsers[24],
     createdAt: '3 weeks ago',
     category: 'Computer Networks',
     subject: 'Computer Networks Lab',
@@ -602,7 +602,7 @@ const moreDoubts: Doubt[] = [
     title: 'MOSFET small-signal model: Determining gm and rds for common-source amplifier gain',
     description: 'When deriving the voltage gain $A_v = -g_m (r_o \\parallel R_D)$ of a NMOS CS amplifier with channel-length modulation parameter $\\lambda$, how do we extract parameters from spice IV curves?',
     authorId: 'user-10',
-    author: mockUsers[9],
+    authorSnapshot: mockUsers[9],
     createdAt: '4 weeks ago',
     category: 'VLSI & Digital Electronics',
     subject: 'Analog Electronic Circuits',
@@ -619,7 +619,7 @@ const moreDoubts: Doubt[] = [
     title: 'Dijkstra vs Bellman-Ford vs Floyd-Warshall: Complexity and Negative Weight Handling',
     description: 'Why does Dijkstra fail with negative edge weights even when there are no negative cycles? When should we pick Bellman-Ford $O(V \\cdot E)$ over Floyd-Warshall $O(V^3)$?',
     authorId: 'user-23',
-    author: mockUsers[22],
+    authorSnapshot: mockUsers[22],
     createdAt: '4 weeks ago',
     category: 'Data Structures & Algorithms',
     subject: 'Graph Theory & Network Optimization',
@@ -636,7 +636,7 @@ const moreDoubts: Doubt[] = [
     title: 'FastAPI dependency injection system: Yield dependencies for database session lifecycle',
     description: 'How does FastAPI `Depends()` with python generator functions (`yield session`) guarantee that the database session closes even if an unhandled HTTPException is raised inside the route handler?',
     authorId: 'user-21',
-    author: mockUsers[20],
+    authorSnapshot: mockUsers[20],
     createdAt: '4 weeks ago',
     category: 'Web & Fullstack Engineering',
     subject: 'Web API Architecture',
@@ -653,7 +653,7 @@ const moreDoubts: Doubt[] = [
     title: 'How does the JVM Garbage Collector (G1 GC) partition memory into regions?',
     description: 'Compared to traditional generational collectors with fixed Eden, Survivor, and Tenured boundaries, how does Garbage-First (G1) dynamically allocate 1MB to 32MB regions to meet latency targets?',
     authorId: 'user-15',
-    author: mockUsers[14],
+    authorSnapshot: mockUsers[14],
     createdAt: '1 month ago',
     category: 'Data Structures & Algorithms',
     subject: 'Java Internals & Memory Architecture',
@@ -670,7 +670,7 @@ const moreDoubts: Doubt[] = [
     title: 'Thermodynamics: Rankine Cycle reheating and regeneration efficiency calculations',
     description: 'Why does superheating and reheating increase thermal efficiency while simultaneously keeping steam moisture content low at the turbine exhaust stage?',
     authorId: 'user-8',
-    author: mockUsers[7],
+    authorSnapshot: mockUsers[7],
     createdAt: '1 month ago',
     category: 'Mechanical CAD & FEA',
     subject: 'Thermal Engineering',
@@ -687,7 +687,7 @@ const moreDoubts: Doubt[] = [
     title: 'Kubernetes Ingress vs NodePort vs LoadBalancer: When to choose which service type?',
     description: 'For hosting a college event portal with 5 microservices, which service type provides the cleanest SSL termination and URL path-based routing (`/api`, `/auth`) without expensive public IPs?',
     authorId: 'user-30',
-    author: mockUsers[29],
+    authorSnapshot: mockUsers[29],
     createdAt: '1 month ago',
     category: 'Cloud Computing & DevOps',
     subject: 'Cloud Infrastructure & DevOps',
@@ -704,7 +704,7 @@ const moreDoubts: Doubt[] = [
     title: 'Understanding Pointers to Functions in C and their use in callback event handlers',
     description: 'What is the syntax for declaring an array of function pointers that take two ints and return an int, and how are function pointers utilized in hardware driver HAL layers?',
     authorId: 'user-1',
-    author: mockUsers[0],
+    authorSnapshot: mockUsers[0],
     createdAt: '1 month ago',
     category: 'Data Structures & Algorithms',
     subject: 'Advanced C Systems Programming',
@@ -721,7 +721,7 @@ const moreDoubts: Doubt[] = [
     title: 'How does Attention mechanism in Transformers overcome LSTM bottleneck for long context?',
     description: 'In recurrent networks, the hidden state vector has fixed dimensionality which creates an information bottleneck. How does Scaled Dot-Product Attention $softmax(QK^T / \\sqrt{d_k})V$ provide direct routing?',
     authorId: 'user-6',
-    author: mockUsers[5],
+    authorSnapshot: mockUsers[5],
     createdAt: '1 month ago',
     category: 'Machine Learning & AI',
     subject: 'Natural Language Processing',
@@ -738,7 +738,7 @@ const moreDoubts: Doubt[] = [
     title: 'Solving transient analysis of RLC circuits using Laplace transforms and partial fractions',
     description: 'For a series RLC circuit with DC step input $V_s$, how do the characteristic roots determine overdamped, underdamped, and critically damped system responses?',
     authorId: 'user-28',
-    author: mockUsers[27],
+    authorSnapshot: mockUsers[27],
     createdAt: '1 month ago',
     category: 'Engineering Mathematics',
     subject: 'Network Analysis & Synthesis',
@@ -755,7 +755,7 @@ const moreDoubts: Doubt[] = [
     title: 'Topological Sort: Kahn\'s algorithm using in-degree array vs DFS with finishing times',
     description: 'Can Kahn\'s algorithm detect directed cycles simultaneously while constructing the topological order? What is the edge case when queue becomes empty before processing all V vertices?',
     authorId: 'user-23',
-    author: mockUsers[22],
+    authorSnapshot: mockUsers[22],
     createdAt: '1 month ago',
     category: 'Data Structures & Algorithms',
     subject: 'Graph Algorithms',
@@ -772,7 +772,7 @@ const moreDoubts: Doubt[] = [
     title: 'Interview Experience: Goldman Sachs 2025 Quantitative Research & SDE campus drive',
     description: 'Detailed breakdown of the 3 rounds: Online test (math + DP), Technical round 1 (probability, LRU cache implementation), and Senior leadership round with tips for 3rd year juniors.',
     authorId: 'user-15',
-    author: mockUsers[14],
+    authorSnapshot: mockUsers[14],
     createdAt: '1 month ago',
     category: 'Placements & Coding Tests',
     subject: 'Placement Preparation',
@@ -789,7 +789,7 @@ const moreDoubts: Doubt[] = [
     title: 'Understanding SQL Window Functions: ROW_NUMBER vs RANK vs DENSE_RANK',
     description: 'When calculating top 3 scores per department, what is the exact difference between RANK and DENSE_RANK when two students have tied scores? Can you demonstrate with an SQL query?',
     authorId: 'user-7',
-    author: mockUsers[6],
+    authorSnapshot: mockUsers[6],
     createdAt: '1 month ago',
     category: 'Database Systems & SQL',
     subject: 'Database Systems & Analytics',
@@ -806,7 +806,7 @@ const moreDoubts: Doubt[] = [
     title: 'ESP32 Deep Sleep modes: Reducing current consumption from 120mA to 10uA with RTC Timer wake-up',
     description: 'We are deploying an outdoor agricultural soil sensor node powered by a 18650 Li-ion battery. How do we configure ESP-IDF deep sleep with RTC GPIO wake-up, disabling flash voltage regulators?',
     authorId: 'user-5',
-    author: mockUsers[4],
+    authorSnapshot: mockUsers[4],
     createdAt: '1 month ago',
     category: 'Embedded Systems & IoT',
     subject: 'Low Power IoT System Design',
@@ -823,7 +823,7 @@ const moreDoubts: Doubt[] = [
     title: 'How does Linux Virtual Memory manage Page Tables with Multi-level Paging and TLB?',
     description: 'Why do 64-bit systems use 4-level or 5-level page tables instead of a single flat table? What is the impact of a Translation Lookaside Buffer (TLB) miss on CPU instruction cycles?',
     authorId: 'user-3',
-    author: mockUsers[2], // Dr. Ramesh Kumar (Admin/Faculty)
+    authorSnapshot: mockUsers[2], // Dr. Ramesh Kumar (Admin/Faculty)
     createdAt: '1 month ago',
     category: 'Operating Systems & Concurrency',
     subject: 'Computer Systems Architecture',
@@ -840,7 +840,7 @@ const moreDoubts: Doubt[] = [
     title: 'Differences between I2C and SPI protocols: Clock stretching, multi-master arbitration and speeds',
     description: 'Why is SPI full-duplex with push-pull pins significantly faster (up to 50MHz) than I2C open-drain lines with pull-up resistors (400kHz/1MHz)? How does I2C collision arbitration work?',
     authorId: 'user-2',
-    author: mockUsers[1],
+    authorSnapshot: mockUsers[1],
     createdAt: '1 month ago',
     category: 'Embedded Systems & IoT',
     subject: 'Embedded Peripheral Protocols',
@@ -857,7 +857,7 @@ const moreDoubts: Doubt[] = [
     title: 'Writing Lexer and Parser using Flex (Lex) and Bison (Yacc) for custom mathematical expressions',
     description: 'How to handle operator precedence and associativity in Bison grammar rules to avoid shift/reduce and reduce/reduce conflicts in arithmetic parsing?',
     authorId: 'user-29',
-    author: mockUsers[28],
+    authorSnapshot: mockUsers[28],
     createdAt: '1 month ago',
     category: 'Data Structures & Algorithms',
     subject: 'Compiler Design',
@@ -874,7 +874,7 @@ const moreDoubts: Doubt[] = [
     title: 'Off-campus Summer Research Internship application roadmap for 2nd and 3rd year students',
     description: 'How to identify faculty research papers, write a targeted statement of purpose (SOP), and approach professors at IIT Madras, IISc, and TIFR for formal summer fellowships (SURGE, SRFP)?',
     authorId: 'user-6',
-    author: mockUsers[5],
+    authorSnapshot: mockUsers[5],
     createdAt: '1 month ago',
     category: 'Internships & Research Labs',
     subject: 'Academic Careers & Fellowships',
@@ -891,7 +891,7 @@ const moreDoubts: Doubt[] = [
     title: 'Implementing Red-Black Tree rotations: Left-rotate and Right-rotate balancing conditions',
     description: 'When inserting a node into a Red-Black tree, what are the 3 cases of violations when the parent and uncle nodes are both red vs when the uncle is black? Why is maximum height bounded by $2 \\log_2(n+1)$?',
     authorId: 'user-1',
-    author: mockUsers[0],
+    authorSnapshot: mockUsers[0],
     createdAt: '1 month ago',
     category: 'Data Structures & Algorithms',
     subject: 'Advanced Balanced Search Trees',

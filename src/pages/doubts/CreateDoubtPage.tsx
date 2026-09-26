@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate, useParams, Link } from 'react-router-dom';
 import {
   Lock,
   Globe,
@@ -14,39 +14,74 @@ import {
   Italic,
   List,
   Sparkles,
-  ArrowLeft
+  ArrowLeft,
+  AlertTriangle
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { useApp } from '../../context/AppContext';
 import { CodeBlock } from '../../components/doubts/CodeBlock';
-import { User } from '../../types';
+import { Attachment, DoubtPriority, User } from '../../types';
 
 export const CreateDoubtPage: React.FC = () => {
   const navigate = useNavigate();
-  const { categories, tags, users, currentUser, createDoubt, addToast } = useApp();
+  const { id: editId } = useParams<{ id: string }>();
+  const {
+    categories,
+    users,
+    currentUser,
+    createDoubt,
+    updateDoubt,
+    getDoubtById,
+    addToast
+  } = useApp();
 
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [category, setCategory] = useState(categories[0]?.name || 'Data Structures & Algorithms');
-  const [subject, setSubject] = useState('Analysis of Algorithms');
-  const [tagInput, setTagInput] = useState('DSA, C++');
-  const [visibility, setVisibility] = useState<'public' | 'private'>('public');
+  // Editing exists when the route carries a doubt id (/app/doubts/:id/edit).
+  const editingDoubt = editId ? getDoubtById(editId) : undefined;
+  const isEdit = Boolean(editingDoubt);
+  const canEdit =
+    Boolean(editingDoubt) &&
+    Boolean(currentUser) &&
+    (editingDoubt?.authorId === currentUser?.id || currentUser?.role === 'admin');
+
+  const [title, setTitle] = useState(editingDoubt?.title ?? '');
+  const [description, setDescription] = useState(editingDoubt?.description ?? '');
+  const [category, setCategory] = useState(
+    editingDoubt?.category || categories[0]?.name || 'Data Structures & Algorithms'
+  );
+  const [subject, setSubject] = useState(editingDoubt?.subject || 'Analysis of Algorithms');
+  const [tagInput, setTagInput] = useState(
+    editingDoubt ? editingDoubt.tags.join(', ') : 'DSA, C++'
+  );
+  const [priority, setPriority] = useState<DoubtPriority>(editingDoubt?.priority ?? 'normal');
+  const [visibility, setVisibility] = useState<'public' | 'private'>(
+    editingDoubt?.visibility ?? 'public'
+  );
 
   // Private doubt participants
-  const [allowedUsers, setAllowedUsers] = useState<User[]>([currentUser]);
+  const [allowedUsers, setAllowedUsers] = useState<User[]>(() => {
+    if (!currentUser) return [];
+    if (!editingDoubt) return [currentUser];
+    const ids = editingDoubt.allowedUserIds ?? [];
+    return users.filter(u => ids.includes(u.id) || u.id === currentUser.id);
+  });
   const [participantSearch, setParticipantSearch] = useState('');
 
   // Code snippet toggle
-  const [hasCodeSnippet, setHasCodeSnippet] = useState(false);
-  const [codeLanguage, setCodeLanguage] = useState('cpp');
-  const [codeText, setCodeText] = useState('');
+  const [hasCodeSnippet, setHasCodeSnippet] = useState(Boolean(editingDoubt?.codeSnippet));
+  const [codeLanguage, setCodeLanguage] = useState(editingDoubt?.codeSnippet?.language ?? 'cpp');
+  const [codeText, setCodeText] = useState(editingDoubt?.codeSnippet?.code ?? '');
 
   // Attachments mock
-  const [attachments, setAttachments] = useState<{ name: string; size: string; type: 'image' | 'pdf' }[]>([]);
+  const [attachments, setAttachments] = useState<{ name: string; size: string; type: Attachment['type'] }[]>(
+    editingDoubt?.attachments?.map(a => ({ name: a.name, size: a.size, type: a.type })) ?? []
+  );
 
   // Editor mode
   const [mode, setMode] = useState<'write' | 'preview'>('write');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Guarded route: only rendered for a signed-in, active user.
+  if (!currentUser) return null;
 
   const characterCount = description.length;
 
@@ -79,34 +114,45 @@ export const CreateDoubtPage: React.FC = () => {
       .map(t => t.trim().replace(/^#/, ''))
       .filter(Boolean);
 
-    setTimeout(() => {
-      const newDoubtId = createDoubt({
-        title: title.trim(),
-        description: description.trim(),
-        category,
-        subject,
-        tags: parsedTags.length > 0 ? parsedTags : ['General'],
-        visibility,
-        allowedUserIds: visibility === 'private' ? allowedUsers.map(u => u.id) : undefined,
-        codeSnippet: hasCodeSnippet && codeText.trim() ? { language: codeLanguage, code: codeText.trim() } : undefined,
-        attachments: attachments.map(a => ({ name: a.name, size: a.size, type: a.type, url: '#' }))
-      });
+    const payload = {
+      title: title.trim(),
+      description: description.trim(),
+      category,
+      subject,
+      tags: parsedTags.length > 0 ? parsedTags : ['General'],
+      visibility,
+      priority,
+      allowedUserIds: visibility === 'private' ? allowedUsers.map(u => u.id) : undefined,
+      codeSnippet: hasCodeSnippet && codeText.trim() ? { language: codeLanguage, code: codeText.trim() } : undefined,
+      attachments: attachments.map(a => ({ name: a.name, size: a.size, type: a.type, url: '#' }))
+    };
 
+    if (isEdit && editingDoubt) {
+      updateDoubt(editingDoubt.id, payload);
       setIsSubmitting(false);
+      navigate(`/app/doubts/${editingDoubt.id}`);
+      return;
+    }
 
-      confetti({
-        particleCount: 80,
-        spread: 70,
-        origin: { y: 0.6 }
-      });
+    const newDoubtId = createDoubt(payload);
+    setIsSubmitting(false);
 
-      navigate(`/app/doubts/${newDoubtId}`);
-    }, 400);
+    confetti({
+      particleCount: 80,
+      spread: 70,
+      origin: { y: 0.6 }
+    });
+
+    navigate(`/app/doubts/${newDoubtId}`);
   };
 
   const filteredUsers = users
     .filter(u => u.id !== currentUser.id && u.status === 'active')
-    .filter(u => u.name.toLowerCase().includes(participantSearch.toLowerCase()) || u.department.toLowerCase().includes(participantSearch.toLowerCase()));
+    .filter(
+      u =>
+        u.name.toLowerCase().includes(participantSearch.toLowerCase()) ||
+        u.department.toLowerCase().includes(participantSearch.toLowerCase())
+    );
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -120,9 +166,13 @@ export const CreateDoubtPage: React.FC = () => {
             <ArrowLeft className="w-4 h-4" />
           </button>
           <div>
-            <h1 className="text-2xl font-bold text-white tracking-tight">Ask an Academic Doubt</h1>
+            <h1 className="text-2xl font-bold text-white tracking-tight">
+              {isEdit ? 'Edit Academic Doubt' : 'Ask an Academic Doubt'}
+            </h1>
             <p className="text-xs text-slate-400">
-              Get verified explanations and code solutions from peers & mentors
+              {isEdit
+                ? 'Update the question text, tags or visibility — your answer thread is kept.'
+                : 'Get verified explanations and code solutions from peers & mentors'}
             </p>
           </div>
         </div>
@@ -150,6 +200,18 @@ export const CreateDoubtPage: React.FC = () => {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
+        {isEdit && !canEdit && (
+          <div
+            className="p-4 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 flex items-start gap-2"
+            role="alert"
+          >
+            <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" aria-hidden="true" />
+            <span>
+              Only the author or a campus admin can save changes to this question — you can still
+              preview it here.
+            </span>
+          </div>
+        )}
         {mode === 'write' ? (
           <div className="space-y-6">
             {/* Visibility Toggle Card */}
@@ -197,6 +259,32 @@ export const CreateDoubtPage: React.FC = () => {
                     </div>
                   </div>
                 </button>
+              </div>
+
+              {/* Priority (drives feed ordering hints) */}
+              <div className="mt-4 pt-4 border-t border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                <div className="space-y-1.5">
+                  <label
+                    htmlFor="doubt-priority"
+                    className="text-xs font-semibold text-slate-300 block"
+                  >
+                    Priority
+                  </label>
+                  <select
+                    id="doubt-priority"
+                    value={priority}
+                    onChange={e => setPriority(e.target.value as DoubtPriority)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="low">Low - exploring / nice to know</option>
+                    <option value="normal">Normal - blocking my progress</option>
+                    <option value="high">High - lab submission today</option>
+                    <option value="urgent">Urgent - exam in under 24h</option>
+                  </select>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  Urgent doubts are surfaced first to mentors on call.
+                </p>
               </div>
 
               {/* Private Doubt User Selection Drawer */}
@@ -496,7 +584,7 @@ export const CreateDoubtPage: React.FC = () => {
           <button
             type="button"
             onClick={() => {
-              addToast('Draft saved locally.', 'info');
+              addToast('Draft persistence arrives with the Firebase phase - this page keeps your text while you stay on it.', 'info');
             }}
             className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-medium border border-slate-800"
           >
@@ -505,11 +593,13 @@ export const CreateDoubtPage: React.FC = () => {
 
           <button
             type="submit"
-            disabled={isSubmitting || !title.trim() || !description.trim()}
-            className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold text-xs shadow-md shadow-indigo-600/25 transition-all active:scale-95"
+            disabled={isSubmitting || !title.trim() || !description.trim() || (isEdit && !canEdit)}
+            className="flex items-center gap-2 px-6 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-semibold text-xs shadow-md shadow-indigo-600/25 transition-all active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
           >
             <Send className="w-3.5 h-3.5" />
-            <span>{isSubmitting ? 'Posting Doubt...' : 'Post Doubt'}</span>
+            <span>
+              {isSubmitting ? 'Saving…' : isEdit ? 'Save Changes' : 'Post Doubt'}
+            </span>
           </button>
         </div>
       </form>

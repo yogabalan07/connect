@@ -19,10 +19,10 @@ export const SettingsPage: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'profile' | 'account' | 'privacy' | 'notifications' | 'appearance'>('profile');
 
   // Profile fields
-  const [name, setName] = useState(currentUser.name);
-  const [bio, setBio] = useState(currentUser.bio);
-  const [skills, setSkills] = useState(currentUser.skills.join(', '));
-  const [section, setSection] = useState(currentUser.section || 'A');
+  const [name, setName] = useState(currentUser?.name ?? '');
+  const [bio, setBio] = useState(currentUser?.bio ?? '');
+  const [skills, setSkills] = useState(currentUser?.skills.join(', ') ?? '');
+  const [section, setSection] = useState(currentUser?.section || 'A');
 
   // Privacy states
   const [messagePrivacy, setMessagePrivacy] = useState<'everyone' | 'following' | 'mentors'>('everyone');
@@ -44,6 +44,8 @@ export const SettingsPage: React.FC = () => {
       skills: skills.split(',').map(s => s.trim()).filter(Boolean)
     });
   };
+
+  if (!currentUser) return null;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">

@@ -3,15 +3,27 @@ import { Shield, Save, CheckCircle2 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
 export const AdminSettingsPage: React.FC = () => {
-  const { addToast } = useApp();
-  const [requireFacultyApproval, setRequireFacultyApproval] = useState(true);
-  const [autoFlagSpamWords, setAutoFlagSpamWords] = useState(true);
-  const [allowedDomain, setAllowedDomain] = useState('college.edu');
-  const [minRepToComment, setMinRepToComment] = useState('0');
+  const { adminSettings, saveAdminSettings } = useApp();
+  const [requireFacultyApproval, setRequireFacultyApproval] = useState(
+    adminSettings.requireFacultyApproval
+  );
+  const [autoFlagSpamWords, setAutoFlagSpamWords] = useState(adminSettings.autoFlagSpamWords);
+  const [allowedDomain, setAllowedDomain] = useState(adminSettings.allowedDomain);
+  const [minRepToComment, setMinRepToComment] = useState(String(adminSettings.minRepToComment));
+  const [isSaving, setIsSaving] = useState(false);
 
-  const handleSave = (e: React.FormEvent) => {
+  const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    addToast('Admin moderation policies updated.', 'success');
+    setIsSaving(true);
+    // Validation lives in the service (bad domain / out-of-range values are
+    // rejected there and surfaced as an error toast).
+    await saveAdminSettings({
+      requireFacultyApproval,
+      autoFlagSpamWords,
+      allowedDomain: allowedDomain.trim(),
+      minRepToComment: Number(minRepToComment)
+    });
+    setIsSaving(false);
   };
 
   return (
@@ -34,6 +46,7 @@ export const AdminSettingsPage: React.FC = () => {
               type="checkbox"
               checked={requireFacultyApproval}
               onChange={e => setRequireFacultyApproval(e.target.checked)}
+              aria-label="Require department admin approval for new students"
               className="w-4 h-4 rounded text-purple-600"
             />
           </div>
@@ -47,6 +60,7 @@ export const AdminSettingsPage: React.FC = () => {
               type="checkbox"
               checked={autoFlagSpamWords}
               onChange={e => setAutoFlagSpamWords(e.target.checked)}
+              aria-label="Automated homework and assignment solicitation shield"
               className="w-4 h-4 rounded text-purple-600"
             />
           </div>
@@ -78,10 +92,11 @@ export const AdminSettingsPage: React.FC = () => {
         <div className="pt-2">
           <button
             type="submit"
-            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs transition-colors"
+            disabled={isSaving}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs transition-colors disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
           >
             <Save className="w-3.5 h-3.5" />
-            <span>Save Policies</span>
+            <span>{isSaving ? 'Saving…' : 'Save Policies'}</span>
           </button>
         </div>
       </form>

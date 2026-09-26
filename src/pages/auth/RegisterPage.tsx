@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { GraduationCap, User, Mail, Lock, BookOpen, Layers, ArrowRight } from 'lucide-react';
-import { useApp } from '../../context/AppContext';
+import { useAuth } from '../../hooks/useAuth';
 import { Department, AcademicYear } from '../../types';
 
 export const RegisterPage: React.FC = () => {
   const navigate = useNavigate();
-  const { registerUser, addToast } = useApp();
+  const { register } = useAuth();
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -19,7 +19,7 @@ export const RegisterPage: React.FC = () => {
   const [error, setError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -34,20 +34,26 @@ export const RegisterPage: React.FC = () => {
     }
 
     setIsSubmitting(true);
+    const res = await register({
+      name,
+      email,
+      password,
+      department,
+      year,
+      section,
+      skills: skills
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+    });
+    setIsSubmitting(false);
 
-    setTimeout(() => {
-      registerUser({
-        name,
-        email,
-        department,
-        year,
-        section,
-        skills: skills.split(',').map(s => s.trim()).filter(Boolean)
-      });
-      setIsSubmitting(false);
-      addToast('Registration submitted! Awaiting department verification.', 'info');
-      navigate('/pending-approval');
-    }, 500);
+    if (res.ok) {
+      // Session is now active (status `pending`) → status gate shows the queue screen.
+      navigate('/pending-approval', { replace: true });
+    } else {
+      setError(res.message);
+    }
   };
 
   return (
