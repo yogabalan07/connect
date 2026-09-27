@@ -1,7 +1,6 @@
 import { AdminSettings, Announcement, AuditLog, User, Warning } from '../types';
 import { createStore, LoadStatus, useStore } from '../lib/store';
 import { ServiceError, ServiceResult, fail, ok } from '../lib/errors';
-import { mockAnnouncements, mockAuditLogs } from '../data/mockAdminData';
 
 interface AdminState {
   announcements: Announcement[];
@@ -19,8 +18,8 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
 };
 
 const store = createStore<AdminState>({
-  announcements: mockAnnouncements,
-  auditLogs: mockAuditLogs,
+  announcements: [],
+  auditLogs: [],
   warnings: [],
   adminSettings: DEFAULT_ADMIN_SETTINGS,
   status: 'loading'
@@ -43,7 +42,7 @@ export const adminService = {
 
   /**
    * Validates and persists moderation policies.
-   * Mock adapter stores them in memory for this session only — the success
+   * Stored in memory for this session only - the success
    * message must say so until Firestore is wired up.
    */
   async saveAdminSettings(patch: Partial<AdminSettings>): Promise<ServiceResult<AdminSettings>> {

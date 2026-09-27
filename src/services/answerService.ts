@@ -1,7 +1,6 @@
 import { Answer, Comment, User, toUserSnapshot } from '../types';
 import { createStore, LoadStatus, useStore } from '../lib/store';
 import { ServiceError } from '../lib/errors';
-import { mockAnswers } from '../data/mockAnswers';
 
 interface AnswerState {
   answers: Answer[];
@@ -9,7 +8,7 @@ interface AnswerState {
   error?: string;
 }
 
-const store = createStore<AnswerState>({ answers: mockAnswers, status: 'loading' });
+const store = createStore<AnswerState>({ answers: [], status: 'loading' });
 
 export function canEditAnswer(answer: Answer, actor: User | null | undefined): boolean {
   if (!actor || !answer) return false;

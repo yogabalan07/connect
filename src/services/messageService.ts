@@ -1,7 +1,6 @@
 import { Conversation, Message, User } from '../types';
 import { createStore, LoadStatus, useStore } from '../lib/store';
 import { ServiceError } from '../lib/errors';
-import { mockConversations, mockMessages } from '../data/mockMessages';
 
 interface MessageState {
   conversations: Conversation[];
@@ -12,9 +11,9 @@ interface MessageState {
 }
 
 const store = createStore<MessageState>({
-  conversations: mockConversations,
-  messages: mockMessages,
-  activeConversationId: 'conv-1',
+  conversations: [],
+  messages: [],
+  activeConversationId: null,
   status: 'loading'
 });
 

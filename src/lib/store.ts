@@ -4,8 +4,7 @@ import { useSyncExternalStore } from 'react';
  * Minimal external store used by the service layer.
  *
  * Services own their state, the UI subscribes through hooks/context.
- * When the mock adapter is swapped for the Firebase adapter the store
- * will be fed by `onSnapshot` listeners instead of in-memory arrays,
+ * The Firebase adapter feeds the store from Firestore reads and snapshots,
  * without touching any page component.
  */
 export interface Store<T> {
@@ -43,7 +42,7 @@ export function useStore<T>(store: Store<T>): T {
 
 /**
  * Lifecycle of a data subscription.
- * The mock adapter resolves instantly; the Firebase adapter will keep
- * these in `loading` until the first snapshot arrives.
+ * Stores start in `loading` and move to `ready` once their first read
+ * resolves (or `error` when the adapter rejects).
  */
 export type LoadStatus = 'loading' | 'ready' | 'error';

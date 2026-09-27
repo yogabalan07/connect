@@ -7,8 +7,8 @@ interface SocialState {
 }
 
 const store = createStore<SocialState>({
-  bookmarkedDoubtIds: ['doubt-1', 'doubt-5', 'doubt-10'],
-  followingUserIds: ['user-2', 'user-6', 'user-15'],
+  bookmarkedDoubtIds: [],
+  followingUserIds: [],
   status: 'loading'
 });
 

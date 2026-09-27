@@ -1,25 +1,75 @@
 import { describe, expect, it } from 'vitest';
 import { canEditDoubt, canViewDoubt, filterVisibleDoubts } from './doubtService';
-import { allMockDoubts } from '../data/mockDoubts';
-import { mockUsers } from '../data/mockUsers';
-import { Doubt, User } from '../types';
+import { Doubt, User, UserSnapshot } from '../types';
 
-const student = mockUsers[0];
-const mentor = mockUsers[1];
-const admin = mockUsers[2];
+function makeUser(overrides: Partial<User> & Pick<User, 'id' | 'role' | 'status'>): User {
+  return {
+    name: overrides.name ?? 'Test Student',
+    username: overrides.username ?? `user_${overrides.id}`,
+    email: `${overrides.id}@campus.edu`,
+    avatar: '',
+    department: 'Computer Science and Engineering',
+    year: '3rd Year',
+    bio: '',
+    skills: [],
+    reputation: 100,
+    questionsCount: 0,
+    answersCount: 0,
+    acceptedCount: 0,
+    followersCount: 0,
+    followingCount: 0,
+    joinedDate: '2026',
+    badges: [],
+    ...overrides
+  } as User;
+}
 
-const publicDoubt: Doubt = allMockDoubts[0];
-const privateDoubt: Doubt = {
-  ...allMockDoubts[1],
+function snapshot(user: User): UserSnapshot {
+  return {
+    id: user.id,
+    name: user.name,
+    username: user.username,
+    avatar: user.avatar,
+    department: user.department,
+    year: user.year,
+    role: user.role,
+    reputation: user.reputation
+  };
+}
+
+const student = makeUser({ id: 'student-1', role: 'student', status: 'approved' });
+const mentor = makeUser({ id: 'mentor-1', role: 'mentor', status: 'approved' });
+const admin = makeUser({ id: 'admin-1', role: 'admin', status: 'approved' });
+
+function makeDoubt(author: User, overrides: Partial<Doubt> = {}): Doubt {
+  return {
+    id: `doubt-${author.id}-1`,
+    title: 'How does a B+ tree stay balanced on delete?',
+    description: 'I understand inserts but the rebalancing rules on delete confuse me.',
+    authorId: author.id,
+    authorSnapshot: snapshot(author),
+    createdAt: 'Just now',
+    category: 'Data Structures & Algorithms',
+    subject: 'DSA',
+    tags: ['DSA'],
+    visibility: 'public',
+    upvotes: 0,
+    downvotes: 0,
+    views: 1,
+    answersCount: 0,
+    hasAcceptedAnswer: false,
+    ...overrides
+  };
+}
+
+const publicDoubt = makeDoubt(student);
+const privateDoubt = makeDoubt(student, {
+  id: 'doubt-private-1',
   visibility: 'private',
   allowedUserIds: [mentor.id]
-};
+});
 
-const stranger: User = {
-  ...student,
-  id: 'user-stranger',
-  username: 'someone_else'
-};
+const stranger: User = makeUser({ id: 'stranger-1', role: 'student', status: 'approved' });
 
 describe('canViewDoubt (deny-by-default privacy)', () => {
   it('shows public doubts to everyone, including anonymous visitors', () => {
@@ -33,9 +83,7 @@ describe('canViewDoubt (deny-by-default privacy)', () => {
   });
 
   it('allows the author of a private doubt', () => {
-    const author = mockUsers.find(u => u.id === privateDoubt.authorId);
-    expect(author).toBeDefined();
-    expect(canViewDoubt(privateDoubt, author!)).toBe(true);
+    expect(canViewDoubt(privateDoubt, student)).toBe(true);
   });
 
   it('allows explicitly allowed participants', () => {
@@ -77,8 +125,7 @@ describe('filterVisibleDoubts (feed filtering)', () => {
 
 describe('canEditDoubt', () => {
   it('allows the author', () => {
-    const author = mockUsers.find(u => u.id === privateDoubt.authorId);
-    expect(canEditDoubt(privateDoubt, author!)).toBe(true);
+    expect(canEditDoubt(privateDoubt, student)).toBe(true);
   });
 
   it('allows admins to moderate', () => {

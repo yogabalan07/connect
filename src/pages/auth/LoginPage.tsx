@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { motion } from 'motion/react';
-import { GraduationCap, Lock, Mail, ArrowRight, ShieldCheck, KeyRound } from 'lucide-react';
+import { GraduationCap, Lock, Mail, ArrowRight } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 import { useApp } from '../../context/AppContext';
 
 export const LoginPage: React.FC = () => {
   const navigate = useNavigate();
-  const { login, switchDevPersona } = useAuth();
+  const { login } = useAuth();
   const { addToast } = useApp();
 
   const [email, setEmail] = useState('');
@@ -28,15 +28,6 @@ export const LoginPage: React.FC = () => {
       navigate('/app', { replace: true });
     } else {
       setError(res.message);
-    }
-  };
-
-  const handleDevPersona = (role: 'student' | 'admin') => {
-    try {
-      switchDevPersona(role);
-      navigate('/app', { replace: true });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Dev sign-in failed.');
     }
   };
 
@@ -97,32 +88,6 @@ export const LoginPage: React.FC = () => {
               Enter your college email credentials to access the doubt community
             </p>
           </div>
-
-          {/* DEV-ONLY personas: no passwords in source, hidden in production builds */}
-          {import.meta.env.DEV && (
-            <div className="p-3 rounded-xl bg-slate-900/90 border border-dashed border-purple-800/60 text-xs space-y-2">
-              <div className="text-[11px] font-semibold text-purple-400 flex items-center gap-1.5">
-                <KeyRound className="w-3.5 h-3.5" />
-                <span>Development Only — persona switch (no passwords)</span>
-              </div>
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleDevPersona('student')}
-                  className="flex-1 py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700/80 text-[11px] font-medium text-slate-300 border border-slate-700 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
-                >
-                  Student persona
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleDevPersona('admin')}
-                  className="flex-1 py-1.5 px-2.5 rounded-lg bg-purple-900/30 hover:bg-purple-900/50 text-[11px] font-medium text-purple-300 border border-purple-800/60 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-500"
-                >
-                  Admin persona
-                </button>
-              </div>
-            </div>
-          )}
 
           {error && (
             <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300 font-medium">

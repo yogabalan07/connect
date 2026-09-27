@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "lint": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "admin:create": "node scripts/create-admin.mjs",
+    "admin:cleanup-mock": "node scripts/cleanup-mock-users.mjs"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",

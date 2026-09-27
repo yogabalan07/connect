@@ -1,7 +1,6 @@
-import { User, UserRole } from '../types';
+import { User } from '../types';
 import { createStore, LoadStatus, useStore } from '../lib/store';
 import { ServiceError } from '../lib/errors';
-import { mockUsers } from '../data/mockUsers';
 import { EDITABLE_PROFILE_KEYS, getUserAdapter } from './userAdapter';
 import type {
   AuthProfileIdentity,
@@ -159,10 +158,15 @@ function transition(
 export const userService = {
   store,
 
-  /** Loads the Firestore directory once at boot (keeps stores honest). */
+  /**
+   * Prepares the directory for this boot.
+   *
+   * The first read starts once a session exists: Firestore rules only let
+   * signed-in members list `users`, so an anonymous boot must not issue a
+   * request that is guaranteed to come back `permission-denied`.
+   */
   bootstrap(): void {
     store.set(prev => ({ ...prev, status: 'loading', error: undefined }));
-    void userService.loadDirectory();
   },
 
   /** Replaces the directory contents with the persisted ones. */
@@ -201,7 +205,7 @@ export const userService = {
 
   /**
    * Publishes the identity acting on the directory (called by the auth
-   * service on sign-in, restore, persona switch and sign-out).
+   * service on sign-in, restore and sign-out).
    */
   setActor(user: User | null): void {
     actor = user;
@@ -335,31 +339,6 @@ export const userService = {
   blockUser: transition('blockUser'),
   /** blocked -> approved */
   unblockUser: transition('unblockUser'),
-
-  /**
-   * DEV/test only: resolves a demo persona for local persona switching,
-   * seeding the mock record when the directory has no matching account.
-   * Production builds never reach the seed (see `import.meta.env.DEV`).
-   */
-  ensureDevPersona(role: UserRole): User {
-    const directory = store.get().users;
-    const findIn = (users: User[]): User | undefined =>
-      users.find(u => u.role === role && u.status === 'approved') ?? users.find(u => u.role === role);
-
-    const existing = findIn(directory);
-    if (existing) return existing;
-
-    if (!import.meta.env.DEV) {
-      throw new ServiceError('user/dev-only', 'Demo personas are only available in development.');
-    }
-
-    const seed = findIn(mockUsers);
-    if (!seed) {
-      throw new ServiceError('auth/no-persona', `No ${role} persona exists in the mock directory.`);
-    }
-    upsert(seed);
-    return seed;
-  },
 
   /**
    * Derived counters (reputation, question/answer totals). Still local-only:

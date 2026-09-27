@@ -1,27 +1,86 @@
 rules_version = '2';
 
 // ---------------------------------------------------------------------------
-// PLACEHOLDER — M3 only ships the schema; milestone M4 owns security rules.
+// Production policy for the user directory (`users/{uid}`).
 //
-// These rules are intentionally deny-by-default: an accidental deploy of this
-// file can never expose campus data (the app would fail closed instead), and
-// no one gets a false sense of "rules are configured" before M4 lands.
-// Nothing in this repository deploys them — see README (Firebase setup).
+// The Firebase Auth UID is the canonical identity: the document id and the
+// stored `id` field always equal `request.auth.uid`.
 //
-// The policy M4 must encode here, mirroring the domain layer:
-//   * profile reads:  the owning account, or any signed-in member for the
-//     fields the directory needs (name, avatar, department, status, …);
-//   * profile create: only `create()` — the document id must equal
-//     `request.auth.uid`, with `role == 'student'` and `status == 'pending'`
-//     forced by the create rules, so no client can register an admin;
-//   * profile update: allow-listed profile fields only; `role`, `status`,
-//     `id` and the timestamps may only change through an admin check
-//     (`get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'`);
-//   * moderation transitions stay in `approve/reject/block/unblock` calls
-//     that the client cannot forge.
+//   read   - any signed-in member (the directory, author cards and the admin
+//            pending queue all need other members' profile fields). Anonymous
+//            callers are rejected, so the client only reads once signed in.
+//   create - only the owning account may create its own document, and only as
+//            `role: 'student'` / `status: 'pending'`; nobody can register an
+//            admin or a pre-approved account.
+//   update - owners may touch the allow-listed profile fields only (`id`,
+//            `role`, `status` and `createdAt` are never in that list, so a
+//            student can never escalate or self-approve). Only an already
+//            approved admin may change `role` / `status`, which is what the
+//            approve, reject, block and unblock calls do.
+//   delete - administrators only.
+//
+// Everything else in the database stays closed until a collection ships a
+// policy of its own. The client only reads and writes `users` today, so this
+// blocks no legitimate operation.
 // ---------------------------------------------------------------------------
 service cloud.firestore {
   match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    /** The profile behind the caller's Auth UID. */
+    function callerProfile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return signedIn() && callerProfile().role == 'admin';
+    }
+
+    /** `EditableProfilePatch` - what a member may change on their own record. */
+    function ownerEditableKeys() {
+      return [
+        'displayName',
+        'username',
+        'department',
+        'year',
+        'batch',
+        'bio',
+        'photoURL',
+        'coverImage',
+        'skills',
+        'updatedAt'
+      ];
+    }
+
+    /** Moderation fields - only an admin transition may change these. */
+    function adminOnlyKeys() {
+      return ['role', 'status', 'updatedAt'];
+    }
+
+    match /users/{uid} {
+      allow get, list: if signedIn();
+
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.id == uid
+        && request.resource.data.email is string
+        && request.resource.data.displayName is string
+        && request.resource.data.role == 'student'
+        && request.resource.data.status == 'pending';
+
+      allow update: if
+        (signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(ownerEditableKeys()))
+        || (isAdmin()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(adminOnlyKeys()));
+
+      allow delete: if isAdmin();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

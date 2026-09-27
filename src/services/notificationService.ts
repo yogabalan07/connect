@@ -1,6 +1,5 @@
 import { Notification } from '../types';
 import { createStore, LoadStatus, useStore } from '../lib/store';
-import { mockNotifications } from '../data/mockNotifications';
 
 interface NotificationState {
   notifications: Notification[];
@@ -9,7 +8,7 @@ interface NotificationState {
 }
 
 const store = createStore<NotificationState>({
-  notifications: mockNotifications,
+  notifications: [],
   status: 'loading'
 });
 

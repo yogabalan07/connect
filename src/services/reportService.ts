@@ -1,7 +1,6 @@
 import { Report, ReportReason, User } from '../types';
 import { createStore, LoadStatus, useStore } from '../lib/store';
 import { ServiceResult, fail, ok } from '../lib/errors';
-import { mockReports } from '../data/mockAdminData';
 import { doubtService } from './doubtService';
 import { answerService } from './answerService';
 import { adminService } from './adminService';
@@ -12,7 +11,7 @@ interface ReportState {
   status: LoadStatus;
 }
 
-const store = createStore<ReportState>({ reports: mockReports, status: 'loading' });
+const store = createStore<ReportState>({ reports: [], status: 'loading' });
 
 export const REPORT_REASONS: ReportReason[] = [
   'Spam',
@@ -38,7 +37,7 @@ export interface CreateReportInput {
 /**
  * Moderation service. UI never writes reports directly — it always goes
  * through these methods so Cloud Functions can take over the same call sites.
- * The mock adapter keeps reports in memory for this session only.
+ * Reports are kept in memory for this session only.
  */
 export const reportService = {
   store,

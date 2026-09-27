@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Clock, ShieldCheck, CheckCircle2, MailCheck, RefreshCw } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Clock, CheckCircle2, MailCheck, RefreshCw } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 
 export const PendingApprovalPage: React.FC = () => {
-  const navigate = useNavigate();
-  const { switchDevPersona, emailVerified, sendVerification, refreshSession } = useAuth();
+  const { emailVerified, sendVerification, refreshSession } = useAuth();
   const [verificationStatus, setVerificationStatus] = useState<string>('');
   const [verificationError, setVerificationError] = useState<string>('');
   const [isSending, setIsSending] = useState(false);
@@ -28,19 +27,7 @@ export const PendingApprovalPage: React.FC = () => {
     else setVerificationError(res.message);
   };
 
-  const handleInstantApproveDemo = () => {
-    // DEV-only: switch the mock session to an admin so the approval queue can
-    // be reviewed. Removed from production builds along with the button below.
-    try {
-      switchDevPersona('admin');
-      navigate('/admin/users/pending');
-    } catch {
-      /* dev-only helper unavailable in production builds */
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 antialiased text-slate-100">
+  return (    <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4 antialiased text-slate-100">
       <div className="w-full max-w-md rounded-3xl bg-slate-900 border border-slate-800 p-8 shadow-2xl text-center space-y-6">
         <div className="w-16 h-16 rounded-2xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center mx-auto shadow-inner">
           <Clock className="w-8 h-8 animate-pulse" />
@@ -118,24 +105,6 @@ export const PendingApprovalPage: React.FC = () => {
           )}
         </div>
 
-        {/* DEV-ONLY fast-track (hidden in production builds) */}
-        {import.meta.env.DEV && (
-          <div className="p-3.5 rounded-2xl bg-purple-950/40 border border-dashed border-purple-500/40 text-xs">
-            <div className="font-semibold text-purple-300 mb-1">Development Only:</div>
-            <p className="text-[11px] text-slate-400 mb-2.5">
-              Switch the local mock session to Dr. Ramesh Kumar (Admin) to review and approve newly
-              registered students in real time. No passwords involved.
-            </p>
-            <button
-              type="button"
-              onClick={handleInstantApproveDemo}
-              className="w-full py-2 px-3 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-semibold text-xs transition-colors flex items-center justify-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-purple-400"
-            >
-              <ShieldCheck className="w-4 h-4" />
-              <span>Open Admin Approval Queue</span>
-            </button>
-          </div>
-        )}
         <div className="flex items-center justify-center gap-4 text-xs text-slate-400 pt-2">
           <Link to="/login" className="text-indigo-400 hover:underline">
             Back to Sign In

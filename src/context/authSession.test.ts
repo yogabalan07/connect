@@ -129,15 +129,4 @@ describe('toAuthSnapshot', () => {
     expect(resolveAppAccess(snapshot)).toEqual({ type: 'redirect', to: '/login' });
     expect(resolveGuestAccess(snapshot)).toEqual({ type: 'allow' });
   });
-
-  it('feeds a DEV persona session through the same guard contract', () => {
-    const snapshot = toAuthSnapshot(
-      { ...signedInSession, source: 'dev' },
-      makeProfile({ role: 'admin' })
-    );
-
-    expect(snapshot.isAuthenticated).toBe(true);
-    expect(resolveAppAccess(snapshot)).toEqual({ type: 'allow' });
-    expect(resolveAdminAccess(snapshot)).toEqual({ type: 'allow' });
-  });
 });

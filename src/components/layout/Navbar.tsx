@@ -15,7 +15,6 @@ import {
 import { useApp } from '../../context/AppContext';
 import { useAuth } from '../../hooks/useAuth';
 import { ThemeToggle } from '../ui/ThemeToggle';
-import { RoleSwitcher } from '../ui/RoleSwitcher';
 import { QuickSearchModal } from '../modals/QuickSearchModal';
 
 export const Navbar: React.FC = () => {
@@ -67,9 +66,6 @@ export const Navbar: React.FC = () => {
 
           {/* Right: Actions */}
           <div className="flex items-center gap-2.5">
-            {/* Quick Demo Role Switcher */}
-            <RoleSwitcher />
-
             {/* Ask Doubt CTA Button */}
             <Link
               to="/app/create"

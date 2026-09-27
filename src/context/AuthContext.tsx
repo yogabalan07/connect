@@ -2,14 +2,14 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo } fro
 import { User, UserRole, UserStatus } from '../types';
 import { useStore } from '../lib/store';
 import { authService, AuthResult, AuthSessionState, RegisterInput } from '../services/authService';
-import { useUsersStore } from '../services/userService';
+import { useUsersStore, userService } from '../services/userService';
 import { toastStore } from '../lib/toastStore';
 import type { AuthSnapshot } from '../lib/routeAccess';
 
 export interface AuthContextValue {
   /** Signed-in profile, or null when there is no profile yet. */
   currentUser: User | null;
-  /** True whenever Firebase (or a DEV persona) says someone is signed in. */
+  /** True whenever Firebase says someone is signed in. */
   isAuthenticated: boolean;
   /** True while Firebase resolves the persisted session via onAuthStateChanged. */
   isLoading: boolean;
@@ -25,8 +25,6 @@ export interface AuthContextValue {
   sendVerification: () => Promise<{ ok: boolean; message: string }>;
   /** Reloads the Firebase identity (picks up a completed email verification). */
   refreshSession: () => Promise<{ ok: boolean; message: string }>;
-  /** DEV-ONLY persona switch (throws in production builds). */
-  switchDevPersona: (role: UserRole) => User;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -66,6 +64,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     authService.start();
   }, []);
+
+  // The directory is readable only while signed in (see `firestore.rules`);
+  // loading it here keeps anonymous boots from provoking a denied read.
+  useEffect(() => {
+    if (!session.uid) return;
+    void userService.loadDirectory();
+  }, [session.uid]);
 
   // A profile that cannot be resolved (read failure, or an identity without
   // a usable `users/{uid}` document) is reported once instead of silently
@@ -120,12 +125,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return { ok: false, message: result.message };
   }, []);
 
-  const switchDevPersona = useCallback((role: UserRole): User => {
-    const persona = authService.switchDevPersona(role);
-    toastStore.add(`DEV session switched to ${persona.name} (${persona.role}).`, 'info');
-    return persona;
-  }, []);
-
   const value = useMemo<AuthContextValue>(
     () => ({
       currentUser,
@@ -139,8 +138,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       logout,
       forgotPassword,
       sendVerification,
-      refreshSession,
-      switchDevPersona
+      refreshSession
     }),
     [
       currentUser,
@@ -151,8 +149,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       logout,
       forgotPassword,
       sendVerification,
-      refreshSession,
-      switchDevPersona
+      refreshSession
     ]
   );
 

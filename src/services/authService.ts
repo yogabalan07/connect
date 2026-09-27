@@ -1,4 +1,4 @@
-import { AcademicYear, Department, User, UserRole } from '../types';
+import { AcademicYear, Department, User } from '../types';
 import { createStore, useStore } from '../lib/store';
 import { ServiceError, ServiceResult, fail, ok } from '../lib/errors';
 import { userService } from './userService';
@@ -13,7 +13,7 @@ import { mapFirestoreError } from './firestoreErrors';
  *
  * Guarantees:
  * - The Firebase Auth UID is the canonical identity; `sessionStore.uid` always
- *   mirrors `onAuthStateChanged` (or a DEV-only local persona).
+ *   mirrors `onAuthStateChanged`.
  * - Passwords are handed straight to the adapter and never stored, logged or
  *   written to any store, browser storage or profile document.
  * - Role/status are application profile data (defaults: student / pending) and
@@ -44,8 +44,8 @@ export interface AuthSessionState {
   /** True until Firebase answers its first `onAuthStateChanged` callback. */
   isLoading: boolean;
   uid: string | null;
-  /** `firebase` for real sessions, `dev` for the local persona helper. */
-  source: 'firebase' | 'dev' | null;
+  /** Backend that produced the session. Always Firebase Authentication. */
+  source: 'firebase' | null;
   emailVerified: boolean;
   /**
    * Why the profile behind the session could not be resolved (read failure or
@@ -72,28 +72,6 @@ const sessionStore = createStore<AuthSessionState>({ ...INITIAL_SESSION });
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
-}
-
-/**
- * DEV builds only. `import.meta.env.DEV` is statically replaced with `false`
- * by the production bundler, so persona switching cannot exist in production;
- * this check is the runtime backstop for anyone calling the API directly.
- */
-function isDevBuild(): boolean {
-  const env = import.meta.env as Record<string, unknown>;
-  const dev = env.DEV;
-  if (dev === true || dev === 'true') return true;
-  if (dev === false || dev === 'false') return false;
-  return env.MODE !== 'production';
-}
-
-function assertDevBuild(): void {
-  if (!isDevBuild()) {
-    throw new ServiceError(
-      'auth/dev-only',
-      'Development personas are only available while running `npm run dev`.'
-    );
-  }
 }
 
 /** Profile restores currently running, keyed by UID (dedupes listeners). */
@@ -178,13 +156,6 @@ function applyFirebaseUser(user: AuthUser): void {
 function handleAuthState(user: AuthUser | null): void {
   if (user) {
     applyFirebaseUser(user);
-    return;
-  }
-
-  const current = sessionStore.get();
-  if (current.source === 'dev') {
-    // A local DEV persona is not a Firebase session: keep it until signed out.
-    if (current.isLoading) sessionStore.set({ ...current, isLoading: false });
     return;
   }
 
@@ -343,11 +314,8 @@ export const authService = {
 
   /** Signs out immediately on the client; Firebase clears its own session. */
   signOut(): void {
-    const source = sessionStore.get().source;
     forgetRestores();
     endSession();
-
-    if (source === 'dev') return; // local persona, nothing to revoke remotely
 
     ensureListening();
     void boundAdapter?.signOut().catch(() => undefined);
@@ -409,25 +377,6 @@ export const authService = {
     } catch (error) {
       return toFail(error);
     }
-  },
-
-  /**
-   * DEV-ONLY persona switch used by `components/ui/RoleSwitcher` and the dev
-   * shortcuts on the auth screens. It writes a local `dev` session only — no
-   * password, no Firebase user, no storage — and throws outside dev builds.
-   */
-  switchDevPersona(role: UserRole): User {
-    assertDevBuild();
-    const persona = userService.ensureDevPersona(role);
-    sessionStore.set({
-      isLoading: false,
-      uid: persona.id,
-      source: 'dev',
-      emailVerified: true,
-      profileError: null
-    });
-    userService.setActor(persona);
-    return persona;
   }
 };
 

@@ -37,8 +37,8 @@ import { useMessages } from '../hooks/useMessages';
 import { useAdmin } from '../hooks/useAdmin';
 import { CreateDoubtInput, UpdateDoubtInput } from '../services/doubtService';
 
-// Load the mock adapter before the first render. The Firebase adapter will
-// keep stores in `loading` until its first snapshot arrives.
+// Start every service read before the first render. Stores stay in `loading`
+// until the adapter answers its first read.
 bootstrapServices();
 
 export interface ToastItemOut extends ToastItem {}

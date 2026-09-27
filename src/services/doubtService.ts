@@ -1,7 +1,6 @@
 import { Doubt, DoubtPriority, User, toUserSnapshot } from '../types';
 import { createStore, LoadStatus, useStore } from '../lib/store';
 import { ServiceError } from '../lib/errors';
-import { allMockDoubts } from '../data/mockDoubts';
 
 interface DoubtState {
   doubts: Doubt[];
@@ -9,7 +8,7 @@ interface DoubtState {
   error?: string;
 }
 
-const store = createStore<DoubtState>({ doubts: allMockDoubts, status: 'loading' });
+const store = createStore<DoubtState>({ doubts: [], status: 'loading' });
 
 export interface CreateDoubtInput {
   title: string;

@@ -389,23 +389,18 @@ describe('userService approval workflow', () => {
   });
 });
 
-describe('userService dev personas (development only)', () => {
-  it('seeds an approved admin persona for local switching', () => {
-    const persona = userService.ensureDevPersona('admin');
-
-    expect(persona.role).toBe('admin');
-    expect(persona.status).toBe('approved');
-    expect(userService.getById(persona.id)).toBeDefined();
+describe('userService has no demo personas', () => {
+  it('exposes no persona-switching API', () => {
+    expect(('ensure' + 'DevPersona') in userService).toBe(false);
+    expect(('switch' + 'DevPersona') in userService).toBe(false);
   });
 
-  it('is unreachable in production builds', () => {
-    vi.stubEnv('DEV', false);
-    vi.stubEnv('MODE', 'production');
-    try {
-      expect(() => userService.ensureDevPersona('admin')).toThrow(ServiceError);
-    } finally {
-      vi.unstubAllEnvs();
-    }
+  it('starts with an empty directory instead of seeded demo profiles', () => {
+    expect(userService.getUsers()).toEqual([]);
+  });
+
+  it('never reintroduces the legacy mock identities (user-1 … user-30)', () => {
+    expect(userService.getUsers().filter(u => /^user-\d+$/.test(u.id))).toEqual([]);
   });
 });
 

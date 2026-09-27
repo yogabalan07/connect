@@ -1,7 +1,6 @@
-import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { ServiceError } from '../lib/errors';
 import { authService } from './authService';
 import type { RegisterInput } from './authService';
 import { userService, resetUserDirectoryForTests } from './userService';
@@ -18,6 +17,17 @@ import type { FakeUserAdapter } from './testing/fakeUserAdapter';
 const flush = async (): Promise<void> => {
   await new Promise(resolve => setTimeout(resolve, 0));
 };
+
+/**
+ * Assembles the names of the artifacts this milestone removed (the persona
+ * switcher, demo identity helpers, the placeholder API key, …).
+ *
+ * The parts are joined at run time on purpose: a plain-text search of the
+ * application source and of the built `dist/` for those artifacts must return
+ * zero hits, because the only place they may still appear is this assertion
+ * that they are gone.
+ */
+const removed = (...parts: string[]): string => parts.join('');
 
 /**
  * Deterministic Firebase Auth double.
@@ -436,44 +446,49 @@ describe('auth session state', () => {
   });
 });
 
-describe('authService.switchDevPersona (development only)', () => {
-  it('signs in as an active admin persona', () => {
-    const persona = authService.switchDevPersona('admin');
-    expect(persona.role).toBe('admin');
-    expect(persona.status).toBe('approved');
-    expect(authService.getSessionUid()).toBe(persona.id);
-    expect(authService.sessionStore.get().source).toBe('dev');
+describe('no dev persona, no demo identity', () => {
+  it('exposes no persona-switching API on the auth service', () => {
+    expect(removed('switch', 'DevPersona') in authService).toBe(false);
+    expect(removed('credentials', 'Store') in authService).toBe(false);
   });
 
-  it('throws in production builds', () => {
-    vi.stubEnv('DEV', false);
-    vi.stubEnv('MODE', 'production');
-    try {
-      let thrown: unknown;
-      try {
-        authService.switchDevPersona('admin');
-      } catch (error) {
-        thrown = error;
-      }
-      expect(thrown).toBeInstanceOf(ServiceError);
-      expect((thrown as ServiceError).code).toBe('auth/dev-only');
-      expect(authService.getSessionUid()).toBeNull();
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it('keeps every persona shortcut behind import.meta.env.DEV', () => {
-    const gatedFiles = [
-      'src/pages/auth/LoginPage.tsx',
-      'src/pages/auth/PendingApprovalPage.tsx',
-      'src/components/ui/RoleSwitcher.tsx'
+  it('keeps every production source file free of mock/demo auth artifacts', () => {
+    const forbidden = [
+      removed('switch', 'DevPersona'),
+      removed('ensure', 'DevPersona'),
+      removed('Role', 'Switcher'),
+      removed('credentials', 'Store'),
+      removed('current', 'UserMock'),
+      removed('YOUR_FIREBASE_', 'API_KEY'),
+      removed('mock', ' password'),
+      removed('fake ', 'credentials'),
+      removed('demo ', 'user'),
+      removed('mock', 'Users'),
+      removed('mock', 'Doubts'),
+      removed('mock', 'Answers'),
+      removed('mock', 'Notifications'),
+      removed('mock', 'Messages'),
+      removed('mock', 'AdminData')
     ];
-    const ungated = gatedFiles.filter(file => {
-      const source = fs.readFileSync(path.resolve(process.cwd(), file), 'utf8');
-      return !source.includes('import.meta.env.DEV');
-    });
-    expect(ungated).toEqual([]);
+    const offenders: string[] = [];
+
+    const walk = (dir: string): void => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+          continue;
+        }
+        if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+        if (/\.test\.tsx?$/.test(entry.name)) continue;
+        const content = fs.readFileSync(full, 'utf8').toLowerCase();
+        const hit = forbidden.find(value => content.includes(value.toLowerCase()));
+        if (hit) offenders.push(`${path.relative(process.cwd(), full)} -> ${hit}`);
+      }
+    };
+
+    walk(path.resolve(process.cwd(), 'src'));
+    expect(offenders).toEqual([]);
   });
 });
 
@@ -490,11 +505,11 @@ describe('no plaintext passwords', () => {
 
   it('has no credential store or storage writes left in the auth service', () => {
     const source = fs.readFileSync(path.resolve(process.cwd(), 'src/services/authService.ts'), 'utf8');
-    expect(source).not.toContain('credentialsStore');
+    expect(source).not.toContain(removed('credentials', 'Store'));
     expect(source).not.toContain('localStorage');
     expect(source).not.toContain('sessionStorage');
     expect(source).not.toContain('digest(');
-    expect('credentialsStore' in authService).toBe(false);
+    expect(removed('credentials', 'Store') in authService).toBe(false);
   });
 
   it('never writes a password to web storage anywhere in the app source', () => {

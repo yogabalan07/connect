@@ -15,7 +15,6 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { ThemeToggle } from '../ui/ThemeToggle';
-import { RoleSwitcher } from '../ui/RoleSwitcher';
 
 export const AdminLayout: React.FC = () => {
   const navigate = useNavigate();
@@ -75,7 +74,6 @@ export const AdminLayout: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
-            <RoleSwitcher />
             <ThemeToggle />
             <div className="flex items-center gap-2 pl-2 border-l border-slate-800">
               <img

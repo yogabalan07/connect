@@ -24,7 +24,6 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { ThemeToggle } from '../../components/ui/ThemeToggle';
-import { RoleSwitcher } from '../../components/ui/RoleSwitcher';
 
 export const LandingPage: React.FC = () => {
   const navigate = useNavigate();
@@ -132,7 +131,6 @@ export const LandingPage: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
-            <RoleSwitcher />
             <ThemeToggle />
             <Link
               to="/login"
