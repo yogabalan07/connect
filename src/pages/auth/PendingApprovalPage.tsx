@@ -1,11 +1,32 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Clock, ShieldCheck, ArrowRight, UserCheck, CheckCircle2 } from 'lucide-react';
+import { Clock, ShieldCheck, CheckCircle2, MailCheck, RefreshCw } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth';
 
 export const PendingApprovalPage: React.FC = () => {
   const navigate = useNavigate();
-  const { switchDevPersona } = useAuth();
+  const { switchDevPersona, emailVerified, sendVerification, refreshSession } = useAuth();
+  const [verificationStatus, setVerificationStatus] = useState<string>('');
+  const [verificationError, setVerificationError] = useState<string>('');
+  const [isSending, setIsSending] = useState(false);
+
+  const handleResendVerification = async () => {
+    setVerificationStatus('');
+    setVerificationError('');
+    setIsSending(true);
+    const res = await sendVerification();
+    setIsSending(false);
+    if (res.ok) setVerificationStatus(res.message);
+    else setVerificationError(res.message);
+  };
+
+  const handleCheckVerification = async () => {
+    setVerificationStatus('');
+    setVerificationError('');
+    const res = await refreshSession();
+    if (res.ok) setVerificationStatus('Verification status refreshed.');
+    else setVerificationError(res.message);
+  };
 
   const handleInstantApproveDemo = () => {
     // DEV-only: switch the mock session to an admin so the approval queue can
@@ -50,6 +71,51 @@ export const PendingApprovalPage: React.FC = () => {
             <Clock className="w-4 h-4 text-amber-400" />
             <span>Faculty approval in review queue</span>
           </div>
+        </div>
+
+        {/* Firebase email verification (production feature) */}
+        <div className="p-4 rounded-2xl bg-slate-950/60 border border-slate-800 text-left space-y-2.5 text-xs">
+          <div className="flex items-center gap-2">
+            <MailCheck className={`w-4 h-4 ${emailVerified ? 'text-emerald-400' : 'text-amber-400'}`} />
+            <span className={emailVerified ? 'text-emerald-300 font-semibold' : 'text-amber-300 font-semibold'}>
+              {emailVerified ? 'College email verified' : 'Email verification pending'}
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-400 leading-relaxed">
+            {emailVerified
+              ? 'Your college email address has been verified through Firebase Authentication.'
+              : 'Open the verification link Firebase sent to your college email to complete this step.'}
+          </p>
+          {!emailVerified && (
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleResendVerification}
+                disabled={isSending}
+                className="flex-1 py-1.5 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-[11px] font-semibold text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+              >
+                {isSending ? 'Sending…' : 'Resend verification email'}
+              </button>
+              <button
+                type="button"
+                onClick={handleCheckVerification}
+                className="py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-slate-300 border border-slate-700 transition-colors flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+              >
+                <RefreshCw className="w-3 h-3" />
+                Check status
+              </button>
+            </div>
+          )}
+          {verificationStatus && (
+            <p className="text-[11px] text-emerald-300" role="status">
+              {verificationStatus}
+            </p>
+          )}
+          {verificationError && (
+            <p className="text-[11px] text-rose-300" role="alert">
+              {verificationError}
+            </p>
+          )}
         </div>
 
         {/* DEV-ONLY fast-track (hidden in production builds) */}

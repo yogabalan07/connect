@@ -2,15 +2,23 @@ import { AcademicYear, Department, User, UserRole } from '../types';
 import { createStore, useStore } from '../lib/store';
 import { ServiceError, ServiceResult, fail, ok } from '../lib/errors';
 import { userService } from './userService';
+import { AuthAdapter, AuthUser, getAuthAdapter, setAuthAdapter as setBackendAdapter } from './authAdapter';
+import { mapAuthError } from './authErrors';
 
 /**
- * Authentication abstraction.
+ * Authentication domain service (Firebase Authentication).
  *
- * The mock adapter keeps a *local* credential book (salted hash, no plain
- * passwords anywhere in the source tree) and a session that only stores the
- * signed-in user id. Role and status are always read from the user record —
- * never from storage — so a future Firebase adapter can replace this file
- * without touching any page, guard or hook.
+ * Layering: UI -> context/hooks -> THIS file -> auth adapter -> Firebase SDK.
+ *
+ * Guarantees:
+ * - The Firebase Auth UID is the canonical identity; `sessionStore.uid` always
+ *   mirrors `onAuthStateChanged` (or a DEV-only local persona).
+ * - Passwords are handed straight to the adapter and never stored, logged or
+ *   written to any store, browser storage or profile document.
+ * - Role/status are application profile data (defaults: student / pending) and
+ *   are always read from the user record, never from the credential layer.
+ * - Every SDK failure leaves as a `ServiceError` with its original
+ *   `auth/...` code, mapped to campus-friendly copy by `authErrors`.
  */
 export interface RegisterInput {
   name: string;
@@ -24,111 +32,46 @@ export interface RegisterInput {
 
 export type AuthResult = ServiceResult<User>;
 
-interface SessionState {
+export interface AuthSessionState {
+  /** True until Firebase answers its first `onAuthStateChanged` callback. */
   isLoading: boolean;
   uid: string | null;
+  /** `firebase` for real sessions, `dev` for the local persona helper. */
+  source: 'firebase' | 'dev' | null;
+  emailVerified: boolean;
 }
 
-interface CredentialRecord {
-  salt: string;
-  hash: string;
-}
-
-type CredentialBook = Record<string, CredentialRecord>;
-
-const SESSION_KEY = 'ch_session_uid';
-const CREDENTIALS_KEY = 'ch_credentials_v1';
 const MIN_PASSWORD_LENGTH = 6;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const hasStorage = typeof localStorage !== 'undefined';
+const INITIAL_SESSION: AuthSessionState = {
+  isLoading: true,
+  uid: null,
+  source: null,
+  emailVerified: false
+};
 
-function readStorage(key: string): string | null {
-  if (!hasStorage) return null;
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-function writeStorage(key: string, value: string): void {
-  if (!hasStorage) return;
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* storage unavailable (private mode) — session stays in memory */
-  }
-}
-
-function removeStorage(key: string): void {
-  if (!hasStorage) return;
-  try {
-    localStorage.removeItem(key);
-  } catch {
-    /* ignore */
-  }
-}
-
-/**
- * Non-cryptographic digest used ONLY by the local mock adapter so that no
- * password is stored in plaintext or shipped in the bundle.
- * Real credentials will be handled exclusively by Firebase Auth.
- */
-function digest(password: string, salt: string): string {
-  const input = `${salt}:${password}`;
-  let hash = 2166136261;
-  for (let i = 0; i < input.length; i += 1) {
-    hash ^= input.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return (hash >>> 0).toString(16);
-}
-
-function createSalt(): string {
-  return Math.random().toString(36).slice(2, 12) + Date.now().toString(36);
-}
-
-function loadCredentials(): CredentialBook {
-  const raw = readStorage(CREDENTIALS_KEY);
-  if (!raw) return {};
-  try {
-    const parsed = JSON.parse(raw) as CredentialBook;
-    return typeof parsed === 'object' && parsed !== null ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function persistCredentials(book: CredentialBook): void {
-  writeStorage(CREDENTIALS_KEY, JSON.stringify(book));
-}
+const sessionStore = createStore<AuthSessionState>({ ...INITIAL_SESSION });
 
 function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
-function restoreSession(): SessionState {
-  const stored = readStorage(SESSION_KEY);
-  if (!stored) return { isLoading: false, uid: null };
-  const user = userService.getById(stored);
-  if (!user) {
-    removeStorage(SESSION_KEY);
-    return { isLoading: false, uid: null };
-  }
-  return { isLoading: false, uid: stored };
-}
-
-const sessionStore = createStore<SessionState>(restoreSession());
-const credentialsStore = createStore<CredentialBook>(loadCredentials());
-
-function setSession(uid: string | null): void {
-  sessionStore.set({ isLoading: false, uid });
-  if (uid) writeStorage(SESSION_KEY, uid);
-  else removeStorage(SESSION_KEY);
+/**
+ * DEV builds only. `import.meta.env.DEV` is statically replaced with `false`
+ * by the production bundler, so persona switching cannot exist in production;
+ * this check is the runtime backstop for anyone calling the API directly.
+ */
+function isDevBuild(): boolean {
+  const env = import.meta.env as Record<string, unknown>;
+  const dev = env.DEV;
+  if (dev === true || dev === 'true') return true;
+  if (dev === false || dev === 'false') return false;
+  return env.MODE !== 'production';
 }
 
 function assertDevBuild(): void {
-  if (!import.meta.env.DEV) {
+  if (!isDevBuild()) {
     throw new ServiceError(
       'auth/dev-only',
       'Development personas are only available while running `npm run dev`.'
@@ -136,9 +79,86 @@ function assertDevBuild(): void {
   }
 }
 
+/** Ensures the directory has a profile for a Firebase identity (uid = id). */
+function provisionProfile(user: AuthUser): User | null {
+  return userService.ensureProfileForAuthUser({
+    uid: user.uid,
+    email: user.email,
+    displayName: user.displayName
+  });
+}
+
+function applyFirebaseUser(user: AuthUser): void {
+  provisionProfile(user);
+  sessionStore.set({
+    isLoading: false,
+    uid: user.uid,
+    source: 'firebase',
+    emailVerified: user.emailVerified
+  });
+}
+
+/** Single consumer of `onAuthStateChanged`. */
+function handleAuthState(user: AuthUser | null): void {
+  if (user) {
+    applyFirebaseUser(user);
+    return;
+  }
+
+  const current = sessionStore.get();
+  if (current.source === 'dev') {
+    // A local DEV persona is not a Firebase session: keep it until signed out.
+    if (current.isLoading) sessionStore.set({ ...current, isLoading: false });
+    return;
+  }
+
+  sessionStore.set({ ...INITIAL_SESSION, isLoading: false });
+}
+
+let boundAdapter: AuthAdapter | null = null;
+let unsubscribeAdapter: (() => void) | null = null;
+
+function bindAdapter(adapter: AuthAdapter): void {
+  unsubscribeAdapter?.();
+  boundAdapter = adapter;
+  sessionStore.set({ ...INITIAL_SESSION });
+  unsubscribeAdapter = adapter.subscribe(handleAuthState);
+}
+
+function ensureListening(): void {
+  if (boundAdapter) return;
+  bindAdapter(getAuthAdapter());
+}
+
+/** The adapter every operation runs against (binds the default one lazily). */
+function currentAdapter(): AuthAdapter {
+  ensureListening();
+  if (!boundAdapter) {
+    throw new ServiceError('auth/not-initialized', 'Authentication is not available right now.');
+  }
+  return boundAdapter;
+}
+
+function toFail(error: unknown): ServiceResult<never> {
+  return fail(mapAuthError(error).message);
+}
+
 export const authService = {
   sessionStore,
-  credentialsStore,
+
+  /** Starts the `onAuthStateChanged` subscription (idempotent). */
+  start(): void {
+    ensureListening();
+  },
+
+  /**
+   * Test/emulator seam: swap the auth backend and re-bind the session
+   * listener. Production always runs the Firebase adapter.
+   */
+  setAuthAdapter(adapter: AuthAdapter): void {
+    setBackendAdapter(adapter);
+    bindAdapter(adapter);
+  },
 
   isLoading(): boolean {
     return sessionStore.get().isLoading;
@@ -148,7 +168,7 @@ export const authService = {
     return sessionStore.get().uid;
   },
 
-  /** Resolves the signed-in profile, or null when there is no valid session. */
+  /** Resolves the signed-in profile, or null when there is no profile yet. */
   getCurrentUser(): User | null {
     const uid = sessionStore.get().uid;
     return uid ? userService.getById(uid) ?? null : null;
@@ -156,78 +176,154 @@ export const authService = {
 
   async signIn(email: string, password: string): Promise<AuthResult> {
     const normalized = normalizeEmail(email);
-    if (!normalized || !password) {
+    if (!normalized || !EMAIL_PATTERN.test(normalized) || !password) {
       return fail('Enter your college email and password.');
     }
 
-    const user = userService.getByEmail(normalized);
-    const credential = credentialsStore.get()[normalized];
-
-    if (!user || !credential) {
-      return fail('Email or password is incorrect.');
+    ensureListening();
+    try {
+      const authUser = await currentAdapter().signIn(normalized, password);
+      const profile = provisionProfile(authUser) ?? userService.getById(authUser.uid);
+      if (!profile) {
+        // Authenticated but unusable: leave the client signed out instead of
+        // stranding the user in a session no guard can render.
+        await currentAdapter()
+          .signOut()
+          .catch(() => undefined);
+        sessionStore.set({ ...INITIAL_SESSION, isLoading: false });
+        return fail('Your account profile could not be loaded. Contact your department administrator.');
+      }
+      applyFirebaseUser(authUser);
+      return ok(profile);
+    } catch (error) {
+      return toFail(error);
     }
-    if (credential.hash !== digest(password, credential.salt)) {
-      return fail('Email or password is incorrect.');
-    }
-
-    setSession(user.id);
-    return ok(user);
   },
 
   async register(input: RegisterInput): Promise<AuthResult> {
     const email = normalizeEmail(input.email);
+    const name = input.name.trim();
+
+    if (!name) return fail('Enter your full name.');
+    if (!email || !EMAIL_PATTERN.test(email)) return fail('Enter a valid college email address.');
     if (input.password.length < MIN_PASSWORD_LENGTH) {
       return fail(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
     }
+    // Fast-fail for emails the directory already owns (no orphaned auth user).
     if (userService.emailExists(email)) {
       return fail('An account with this college email already exists.');
     }
 
+    ensureListening();
     try {
-      const user = userService.createPendingUser({
-        name: input.name,
-        email,
-        department: input.department,
-        year: input.year,
-        section: input.section,
-        skills: input.skills
-      });
+      const authUser = await currentAdapter().signUp(email, input.password);
 
-      const salt = createSalt();
-      const book = { ...credentialsStore.get(), [email]: { salt, hash: digest(input.password, salt) } };
-      credentialsStore.set(book);
-      persistCredentials(book);
+      let profile: User;
+      try {
+        // `onAuthStateChanged` may already have provisioned a provisional
+        // profile for this brand-new UID: upsert instead of failing.
+        profile = userService.getById(authUser.uid)
+          ? userService.updateProfile(authUser.uid, {
+              name,
+              email,
+              department: input.department,
+              year: input.year,
+              skills: input.skills,
+              ...(input.section ? { section: input.section } : {})
+            })
+          : userService.createPendingUser({
+              id: authUser.uid, // Firebase UID = canonical identity
+              name,
+              email,
+              department: input.department,
+              year: input.year,
+              section: input.section,
+              skills: input.skills
+            });
+      } catch (error) {
+        // Never leave an auth account without a matching profile.
+        await currentAdapter()
+          .signOut()
+          .catch(() => undefined);
+        sessionStore.set({ ...INITIAL_SESSION, isLoading: false });
+        return toFail(error);
+      }
 
-      setSession(user.id);
-      return ok(user);
+      // Verification email is best-effort: the account already exists.
+      await currentAdapter()
+        .sendEmailVerification()
+        .catch(() => undefined);
+
+      applyFirebaseUser(authUser);
+      return ok(profile);
     } catch (error) {
-      return fail(error instanceof Error ? error.message : 'Registration failed.');
+      return toFail(error);
     }
   },
 
+  /** Signs out immediately on the client; Firebase clears its own session. */
   signOut(): void {
-    setSession(null);
+    const source = sessionStore.get().source;
+    sessionStore.set({ ...INITIAL_SESSION, isLoading: false });
+
+    if (source === 'dev') return; // local persona, nothing to revoke remotely
+
+    ensureListening();
+    void boundAdapter?.signOut().catch(() => undefined);
   },
 
-  /**
-   * Password recovery placeholder. It never claims that a mail was sent:
-   * delivery only exists once Firebase Auth is wired up.
-   */
   async requestPasswordReset(email: string): Promise<ServiceResult<string>> {
     const normalized = normalizeEmail(email);
-    if (!normalized || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+    if (!normalized || !EMAIL_PATTERN.test(normalized)) {
       return fail('Enter a valid college email address.');
     }
-    return ok(
-      `If an account exists for ${normalized}, reset instructions will be delivered once email delivery is enabled with the Firebase backend.`
-    );
+
+    ensureListening();
+    try {
+      await currentAdapter().sendPasswordReset(normalized);
+      return ok(
+        `If an account exists for ${normalized}, password reset instructions have been sent. Check your inbox and spam folder.`
+      );
+    } catch (error) {
+      const mapped = mapAuthError(error);
+      if (mapped.code === 'auth/user-not-found') {
+        return fail('No account exists for that college email address.');
+      }
+      return fail(mapped.message);
+    }
+  },
+
+  /** Sends (or re-sends) the verification email for the signed-in identity. */
+  async requestEmailVerification(): Promise<ServiceResult<string>> {
+    ensureListening();
+    try {
+      const current = currentAdapter().getCurrentUser();
+      if (!current) return fail('Sign in to verify your college email address.');
+      await currentAdapter().sendEmailVerification();
+      return ok(
+        `A verification link was sent to ${current.email ?? 'your college email'}. Open it to complete verification.`
+      );
+    } catch (error) {
+      return toFail(error);
+    }
+  },
+
+  /** Reloads the Firebase identity (refreshes `emailVerified` after a click). */
+  async refreshSession(): Promise<ServiceResult<User | null>> {
+    ensureListening();
+    try {
+      const authUser = await currentAdapter().reloadUser();
+      applyFirebaseUser(authUser);
+      return ok(userService.getById(authUser.uid) ?? null);
+    } catch (error) {
+      return toFail(error);
+    }
   },
 
   /**
-   * DEV-ONLY persona switch used by the development tooling in
-   * `components/ui/RoleSwitcher`. It changes the local mock session only:
-   * it never writes a role to storage and it does not exist in production
-   * builds (the call throws when `import.meta.env.DEV` is false).
+   * DEV-ONLY persona switch used by `components/ui/RoleSwitcher` and the dev
+   * shortcuts on the auth screens. It writes a local `dev` session only — no
+   * password, no Firebase user, no storage — and throws outside dev builds.
    */
   switchDevPersona(role: UserRole): User {
     assertDevBuild();
@@ -237,11 +333,11 @@ export const authService = {
     if (!persona) {
       throw new ServiceError('auth/no-persona', `No ${role} persona exists in the mock directory.`);
     }
-    setSession(persona.id);
+    sessionStore.set({ isLoading: false, uid: persona.id, source: 'dev', emailVerified: true });
     return persona;
   }
 };
 
-export function useAuthServiceStore(): SessionState {
+export function useAuthServiceStore(): AuthSessionState {
   return useStore(sessionStore);
 }

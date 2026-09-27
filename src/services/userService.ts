@@ -46,8 +46,15 @@ export const userService = {
     return Boolean(userService.getByEmail(email));
   },
 
-  /** Creates a pending account. Passwords never reach this layer. */
+  /**
+   * Creates a pending account. Passwords never reach this layer.
+   * `id` is the Firebase Auth UID when the profile is created for an
+   * authenticated identity — it is the canonical user id everywhere else in
+   * the app. Role and status are fixed by the server-side policy: a client
+   * registration can never choose them (never admin).
+   */
   createPendingUser(input: {
+    id?: string;
     name: string;
     email: string;
     department: Department;
@@ -59,8 +66,13 @@ export const userService = {
       throw new ServiceError('user/email-taken', 'An account with this college email already exists.');
     }
 
+    const id = input.id?.trim() || `user-${Date.now()}`;
+    if (store.get().users.some(u => u.id === id)) {
+      throw new ServiceError('user/id-taken', 'That account already exists.');
+    }
+
     const newUser: User = {
-      id: `user-${Date.now()}`,
+      id,
       name: input.name.trim() || 'New Student',
       username: `student_${Date.now().toString().slice(-6)}`,
       email: input.email.trim().toLowerCase(),
@@ -85,6 +97,41 @@ export const userService = {
 
     store.set(prev => ({ ...prev, users: [newUser, ...prev.users] }));
     return newUser;
+  },
+
+  /**
+   * Resolves the application profile for a Firebase Auth identity.
+   *
+   * The Firebase UID is the canonical id: if the directory has no profile for
+   * it (profile created before the users milestone, imported account, data
+   * loss), a minimal `pending` profile is provisioned on the spot so the UI
+   * never renders a half-signed-in state. Returns null when the identity
+   * carries no email — callers must then handle "authenticated but no profile"
+   * without crashing.
+   */
+  ensureProfileForAuthUser(authUser: {
+    uid: string;
+    email: string | null;
+    displayName: string | null;
+  }): User | null {
+    const existing = store.get().users.find(u => u.id === authUser.uid);
+    if (existing) return existing;
+    if (!authUser.email) return null;
+
+    try {
+      return userService.createPendingUser({
+        id: authUser.uid,
+        name: (authUser.displayName || authUser.email.split('@')[0] || 'New Student').trim(),
+        email: authUser.email,
+        department: 'CSE',
+        year: '1st',
+        section: 'A',
+        skills: []
+      });
+    } catch {
+      // Email already bound to a different profile: leave the directory alone.
+      return null;
+    }
   },
 
   updateProfile(userId: string, patch: Partial<User>): User {
