@@ -21,10 +21,15 @@ import path from 'node:path';
 import readline from 'node:readline';
 import { applicationDefault, initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
-import { getFirestore } from 'firebase-admin/firestore';
 
-/** The database id both the Admin SDK and the Web SDK use when none is given. */
-export const DEFAULT_DATABASE_ID = '(default)';
+/**
+ * Firestore database id used by every admin script.
+ *
+ * The Admin SDK's *implicit* default cannot be used here: it does not resolve
+ * to the database this project actually has, so every Firestore call fails with
+ * gRPC `5 NOT_FOUND`. The database id must therefore always be explicit.
+ */
+export const DEFAULT_DATABASE_ID = 'default';
 
 /** Parses `KEY=VALUE` files without adding a dotenv dependency. */
 export function loadLocalEnv(cwd = process.cwd()) {
@@ -96,19 +101,17 @@ function resolveServiceAccount(env) {
  * Initializes Firebase Admin with the GOOGLE_APPLICATION_CREDENTIALS
  * service-account credential. Scripts only — never called by the web app.
  *
- * The Firestore database id defaults to `(default)` — the same database the
- * web app targets through `getFirestore(app)`. Override it with
- * FIRESTORE_DATABASE_ID only when the project uses a non-standard database.
+ * Returns the app, its project id and `getAuth()`. Firestore is deliberately
+ * NOT created here: callers must name the database explicitly with
+ * `getFirestore(databaseId)`, because implicit database resolution is the bug
+ * this script works around.
  */
 export function initFirebaseAdmin(env = loadLocalEnv()) {
   const { projectId } = resolveServiceAccount(env);
 
   const app = initializeApp({ credential: applicationDefault(), projectId });
 
-  const databaseId = (env.FIRESTORE_DATABASE_ID || '').trim() || DEFAULT_DATABASE_ID;
-  const db = databaseId === DEFAULT_DATABASE_ID ? getFirestore(app) : getFirestore(app, databaseId);
-
-  return { app, projectId, databaseId, auth: getAuth(app), db };
+  return { app, projectId, auth: getAuth(app) };
 }
 
 /**

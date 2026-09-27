@@ -29,7 +29,7 @@
  * The password is never printed, never stored in Firestore, and every error
  * report is reduced to operation + Firebase error code + message.
  */
-import { FieldValue } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import { describeError, initFirebaseAdmin, loadLocalEnv, readSecret } from './lib/env.mjs';
 
 /** Everything the failure reporter needs; secrets are scrubbed before print. */
@@ -61,16 +61,25 @@ async function main() {
   }
 
   let auth;
-  let db;
+  let projectId;
   try {
-    ({ auth, db, projectId: reportContext.projectId, databaseId: reportContext.databaseId } =
-      initFirebaseAdmin(env));
+    ({ auth, projectId } = initFirebaseAdmin(env));
   } catch (error) {
     failOperation('initializing Firebase Admin from GOOGLE_APPLICATION_CREDENTIALS', error);
   }
+  reportContext.projectId = projectId;
 
-  console.log(`[create-admin] project:  ${reportContext.projectId}`);
-  console.log(`[create-admin] database: ${reportContext.databaseId}`);
+  // Explicit database targeting. The Admin SDK's implicit database resolution
+  // does not resolve to the database this project has, which surfaces as gRPC
+  // `5 NOT_FOUND` on every Firestore call — so the database is always named:
+  //   const databaseId = process.env.FIRESTORE_DATABASE_ID || "default";
+  //   const db = getFirestore(databaseId);
+  const databaseId = process.env.FIRESTORE_DATABASE_ID || env.FIRESTORE_DATABASE_ID || 'default';
+  reportContext.databaseId = databaseId;
+  const db = getFirestore(databaseId);
+
+  console.log(`[create-admin] project:  ${projectId}`);
+  console.log(`[create-admin] database: ${databaseId}`);
   console.log(`[create-admin] admin:    ${email}`);
 
   // ---------------------------------------------------------- Auth account

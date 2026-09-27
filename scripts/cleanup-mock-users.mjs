@@ -23,6 +23,7 @@
  *   npm run admin:cleanup-mock -- --apply  # delete what was reported
  *   npm run admin:cleanup-mock -- --ids user-1,user-7 --apply
  */
+import { getFirestore } from 'firebase-admin/firestore';
 import { describeError, initFirebaseAdmin, loadLocalEnv } from './lib/env.mjs';
 
 /** Task 11: operation + Firebase error code + concise message, never secrets. */
@@ -74,14 +75,17 @@ async function main() {
   const env = loadLocalEnv();
   const adminEmail = (env.ADMIN_EMAIL ?? '').trim().toLowerCase() || null;
 
-  let db;
   let projectId;
-  let databaseId;
   try {
-    ({ db, projectId, databaseId } = initFirebaseAdmin(env));
+    ({ projectId } = initFirebaseAdmin(env));
   } catch (error) {
     failOperation('initializing Firebase Admin from GOOGLE_APPLICATION_CREDENTIALS', error);
   }
+
+  // Same explicit database targeting as scripts/create-admin.mjs: never rely
+  // on the Admin SDK's implicit database resolution (it yields `5 NOT_FOUND`).
+  const databaseId = process.env.FIRESTORE_DATABASE_ID || env.FIRESTORE_DATABASE_ID || 'default';
+  const db = getFirestore(databaseId);
 
   console.log(`[cleanup-mock] project:  ${projectId}`);
   console.log(`[cleanup-mock] database: ${databaseId}`);
