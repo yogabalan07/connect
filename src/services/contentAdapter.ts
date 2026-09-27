@@ -114,7 +114,14 @@ export interface UserVotes {
 export interface ContentAdapter {
   // ------------------------------------------------------------------ Doubts
   /** Every doubt the caller is allowed to see (rules filter server-side). */
-  listDoubts(): Promise<Doubt[]>;
+  /**
+   * Reads the feed for `actorId`. The Firebase implementation cannot ask for
+   * the whole collection: Firestore proves a `list` request against the
+   * query's potential result set, so the private-doubt predicate in
+   * `firestore.rules` is only satisfied by queries that constrain the fields
+   * it inspects.
+   */
+  listDoubts(actorId: string): Promise<Doubt[]>;
   getDoubt(id: string): Promise<Doubt | null>;
   /** `doubt.id` and `doubt.authorId` are supplied by the service, never by a form. */
   createDoubt(doubt: Doubt): Promise<Doubt>;

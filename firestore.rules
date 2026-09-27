@@ -15,14 +15,23 @@ rules_version = '2';
 //   categories/{id}, tags/{id}   reference data (admin-managed)
 //   notifications/{id}           per-member inbox
 //
+// Language shape
+//   A rules function may hold at most ten `let` bindings and must end in a
+//   single `return` statement - there are no `if` blocks, no loops and no
+//   early returns. Every branch below is therefore expressed with `&&` / `||`
+//   (which do short-circuit) and the ternary operator, so an expensive
+//   `get()` / `getAfter()` is only reached when its guard already holds.
+//
 // Non-negotiables enforced here (the client mirrors them but is never trusted)
 //   - Approved members only: every content rule reads `users/{uid}` and
 //     refuses `pending`, `rejected` and `blocked` accounts. Anonymous callers
 //     are refused before any document is touched.
 //   - Private doubts stay private: visibility is `public` OR author OR an
 //     explicitly invited participant OR an admin. Knowing a document id is
-//     never enough, and the predicate is the same one the list query is
-//     checked against, so a feed cannot leak private rows either.
+//     never enough, and the same predicate is what a *list* request has to
+//     prove, which is why `listDoubts` issues scoped queries instead of
+//     pulling the collection: Firestore checks a query against its potential
+//     result set, so an unfiltered read would be rejected outright.
 //   - Ownership: only the author (or an admin) edits or deletes what they
 //     wrote; nobody can rewrite `authorId`, `authorSnapshot.id`, `id` or the
 //     creation timestamp after the document exists.
@@ -34,7 +43,7 @@ rules_version = '2';
 //     `acceptedAnswerId`, which in turn must agree with the answer's
 //     `isAccepted` flag in the same atomic write.
 //   - No role, status, reputation or moderation field is ever client-writable
-//     except through the admin branches below.
+//     except through the admin branches below - and never on your own record.
 //
 // Nothing here is ever opened with `allow read, write: if true`.
 // ---------------------------------------------------------------------------
@@ -52,16 +61,16 @@ service cloud.firestore {
     }
 
     /**
-     * The caller's profile as a map: `{}` when nobody is signed in, when the
-     * `users/{uid}` document is missing, or (for reads/writes that only ask
-     * for one field) simply the stored profile. Every rule below starts from
-     * this single `get()`, which keeps a write well inside Firestore's
-     * 10-document access budget.
+     * The caller's profile as a map: `{}` when nobody is signed in, or when
+     * the `users/{uid}` document is missing. The ternary short-circuits, so
+     * an anonymous request never dereferences `request.auth.uid`. Every rule
+     * below starts from this single `get()`, which keeps a write well inside
+     * Firestore's 10-document access budget.
      */
     function caller() {
-      if (!signedIn()) { return {}; }
-      if (!exists(callerProfilePath())) { return {}; }
-      return get(callerProfilePath()).data;
+      return signedIn() && exists(callerProfilePath())
+        ? get(callerProfilePath()).data
+        : {};
     }
 
     function approved(p) {
@@ -91,12 +100,17 @@ service cloud.firestore {
       return get(doubtPath(id)).data;
     }
 
-    /** The visibility predicate, shared by reads and by counter writes. */
+    /**
+     * The visibility predicate. `admin()` is tried first: it does not touch
+     * the document, so a moderator's query can be proven without inspecting
+     * any field, while everyone else has to satisfy one of the field
+     * branches - which is exactly what the scoped feed queries guarantee.
+     */
     function viewable(p, d) {
-      if (d.visibility == 'public') { return true; }
-      if (d.authorId == request.auth.uid) { return true; }
-      if (request.auth.uid in d.allowedUserIds) { return true; }
-      return admin(p);
+      return admin(p)
+        || d.visibility == 'public'
+        || d.authorId == request.auth.uid
+        || request.auth.uid in d.allowedUserIds;
     }
 
     function canView(d) {
@@ -122,7 +136,12 @@ service cloud.firestore {
       ];
     }
 
-    /** Moderation fields - only an admin transition may change these. */
+    /**
+     * Moderation fields. Only an admin transition may change them, and never
+     * on the admin's own record: self-service `role` / `status` writes would
+     * let the sole moderator demote themselves out of the system in one
+     * round-trip, which nobody legitimately needs.
+     */
     function adminOnlyKeys() {
       return ['role', 'status', 'updatedAt'];
     }
@@ -143,6 +162,7 @@ service cloud.firestore {
           && request.auth.uid == uid
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(ownerEditableKeys()))
         || (admin(caller())
+          && request.auth.uid != uid
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(adminOnlyKeys()));
 
       allow delete: if admin(caller());
@@ -170,12 +190,11 @@ service cloud.firestore {
       }
 
       function validVisibility(d) {
-        if (d.visibility == 'private') {
-          return d.allowedUserIds is list
-            && request.auth.uid in d.allowedUserIds
-            && d.authorId in d.allowedUserIds;
-        }
-        return d.allowedUserIds is list && d.allowedUserIds.size() == 0;
+        return d.visibility == 'private'
+          ? (d.allowedUserIds is list
+              && request.auth.uid in d.allowedUserIds
+              && d.authorId in d.allowedUserIds)
+          : (d.allowedUserIds is list && d.allowedUserIds.size() == 0);
       }
 
       /** `answersCount` may only move with the answer named by `lastAnswerId`. */
@@ -188,12 +207,17 @@ service cloud.firestore {
           && answersCountMoves();
       }
 
+      /**
+       * Creating an answer names it as `lastAnswerId` and the answer document
+       * appears; deleting it keeps `lastAnswerId` pointing at the removed
+       * document and the answer disappears. `&&` short-circuits, so the path
+       * is only probed once the delta is known.
+       */
       function answersCountMoves() {
         let target = answerPath(doubtId, request.resource.data.lastAnswerId);
         let delta = request.resource.data.answersCount - resource.data.answersCount;
-        if (delta == 1) { return !exists(target) && existsAfter(target); }
-        if (delta == -1) { return exists(target) && !existsAfter(target); }
-        return false;
+        return (delta == 1 && !exists(target) && existsAfter(target))
+          || (delta == -1 && exists(target) && !existsAfter(target));
       }
 
       function acceptedFlagEdit() {
@@ -204,18 +228,16 @@ service cloud.firestore {
       }
 
       function acceptedFlagMoves() {
-        if (request.resource.data.hasAcceptedAnswer) {
-          let newId = request.resource.data.acceptedAnswerId;
-          let oldId = resource.data.acceptedAnswerId;
-          if (!(newId is string)) { return false; }
-          if (newId is string && oldId is string && newId != oldId) {
-            return getAfter(answerPath(doubtId, oldId)).data.isAccepted == false
-              && getAfter(answerPath(doubtId, newId)).data.isAccepted == true;
-          }
-          return getAfter(answerPath(doubtId, newId)).data.isAccepted == true;
-        }
-        return request.resource.data.acceptedAnswerId == null
-          && resource.data.hasAcceptedAnswer == true;
+        let newId = request.resource.data.acceptedAnswerId;
+        let oldId = resource.data.acceptedAnswerId;
+        let swapping = newId is string && oldId is string && newId != oldId;
+        return request.resource.data.hasAcceptedAnswer
+          ? (newId is string
+              && (swapping
+                  ? getAfter(answerPath(doubtId, oldId)).data.isAccepted == false
+                    && getAfter(answerPath(doubtId, newId)).data.isAccepted == true
+                  : getAfter(answerPath(doubtId, newId)).data.isAccepted == true))
+          : request.resource.data.acceptedAnswerId == null;
       }
 
       /** Expected counter delta implied by the caller's own vote transition. */
@@ -228,29 +250,15 @@ service cloud.firestore {
       }
 
       function expectedUpDelta(path) {
-        if (voteBefore(path, 1)) {
-          if (voteAfter(path, 1)) { return 0; }
-          return -1;
-        }
-        if (voteBefore(path, -1)) {
-          if (voteAfter(path, 1)) { return 1; }
-          return 0;
-        }
-        if (voteAfter(path, 1)) { return 1; }
-        return 0;
+        return voteBefore(path, 1)
+          ? (voteAfter(path, 1) ? 0 : -1)
+          : (voteAfter(path, 1) ? 1 : 0);
       }
 
       function expectedDownDelta(path) {
-        if (voteBefore(path, -1)) {
-          if (voteAfter(path, -1)) { return 0; }
-          return -1;
-        }
-        if (voteBefore(path, 1)) {
-          if (voteAfter(path, -1)) { return 1; }
-          return 0;
-        }
-        if (voteAfter(path, -1)) { return 1; }
-        return 0;
+        return voteBefore(path, -1)
+          ? (voteAfter(path, -1) ? 0 : -1)
+          : (voteAfter(path, -1) ? 1 : 0);
       }
 
       function voteCounterEdit() {
@@ -265,39 +273,38 @@ service cloud.firestore {
           && request.resource.data.downvotes - resource.data.downvotes == expectedDownDelta(path);
       }
 
-      function updateAllowed() {
-        let p = caller();
-        if (!approved(p)) { return false; }
-        let isAuthor = resource.data.authorId == request.auth.uid;
-        let isModerator = admin(p);
-        let diff = request.resource.data.diff(resource.data).affectedKeys();
-
-        return (isAuthor || isModerator)
-            && (diff.hasOnly(contentKeys())
-                && request.resource.data.title is string
-                && request.resource.data.title.size() > 0
-                && request.resource.data.title.size() <= 300
-                && request.resource.data.description is string
-                && request.resource.data.description.size() > 0
-                && request.resource.data.tags is list
-                && request.resource.data.visibility in ['public', 'private']
-                && validVisibility(request.resource.data)
-                && saneTime(request.resource.data.updatedAtMs))
-          || viewable(p, resource.data)
-            && (viewCountEdit() || voteCounterEdit())
-          || answersCountEdit()
-          || (isAuthor || isModerator) && acceptedFlagEdit()
-          || isModerator
-            && diff.hasOnly(['isPinned'])
-            && request.resource.data.isPinned is bool;
-      }
-
       function viewCountEdit() {
         return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['views'])
           && request.resource.data.views is number
           && request.resource.data.views >= 0
           && request.resource.data.views - resource.data.views <= 1
           && request.resource.data.views >= resource.data.views;
+      }
+
+      function updateAllowed() {
+        let p = caller();
+        let isAuthor = resource.data.authorId == request.auth.uid;
+        let isModerator = admin(p);
+        let diff = request.resource.data.diff(resource.data).affectedKeys();
+        let contentEdit = (isAuthor || isModerator)
+          && diff.hasOnly(contentKeys())
+          && request.resource.data.title is string
+          && request.resource.data.title.size() > 0
+          && request.resource.data.title.size() <= 300
+          && request.resource.data.description is string
+          && request.resource.data.description.size() > 0
+          && request.resource.data.tags is list
+          && request.resource.data.visibility in ['public', 'private']
+          && validVisibility(request.resource.data)
+          && saneTime(request.resource.data.updatedAtMs);
+        let counterEdit = viewable(p, resource.data)
+          && (viewCountEdit() || voteCounterEdit());
+        let acceptedEdit = (isAuthor || isModerator) && acceptedFlagEdit();
+        let pinEdit = isModerator
+          && diff.hasOnly(['isPinned'])
+          && request.resource.data.isPinned is bool;
+        return approved(p)
+          && (contentEdit || counterEdit || answersCountEdit() || acceptedEdit || pinEdit);
       }
 
       allow get, list: if canView(resource.data);
@@ -341,35 +348,34 @@ service cloud.firestore {
           return ['content', 'codeSnippet', 'attachments', 'mentions', 'updatedAtMs'];
         }
 
+        function answerAcceptedFlagMatches() {
+          let acceptedId = getAfter(doubtPath(doubtId)).data.acceptedAnswerId;
+          return request.resource.data.isAccepted
+            ? acceptedId == answerId
+            : acceptedId != answerId;
+        }
+
         function answerUpdateAllowed() {
           let p = caller();
-          if (!approved(p)) { return false; }
           let doubt = parentDoubt();
           let diff = request.resource.data.diff(resource.data).affectedKeys();
           let isAuthor = resource.data.authorId == request.auth.uid;
           let mayAccept = doubt.authorId == request.auth.uid;
-
-          return (isAuthor || admin(p))
-              && diff.hasOnly(answerContentKeys())
-              && request.resource.data.content is string
-              && request.resource.data.content.size() > 0
-              && saneTime(request.resource.data.updatedAtMs)
-            || mayAccept
-              && diff.hasOnly(['isAccepted'])
-              && request.resource.data.isAccepted is bool
-              && answerAcceptedFlagMatches()
-            || viewable(p, doubt)
-              && voteCounterEdit();
-        }
-
-        function answerAcceptedFlagMatches() {
-          let acceptedId = getAfter(doubtPath(doubtId)).data.acceptedAnswerId;
-          if (request.resource.data.isAccepted) { return acceptedId == answerId; }
-          return acceptedId != answerId;
+          let contentEdit = (isAuthor || admin(p))
+            && diff.hasOnly(answerContentKeys())
+            && request.resource.data.content is string
+            && request.resource.data.content.size() > 0
+            && saneTime(request.resource.data.updatedAtMs);
+          let acceptEdit = mayAccept
+            && diff.hasOnly(['isAccepted'])
+            && request.resource.data.isAccepted is bool
+            && answerAcceptedFlagMatches();
+          let voteEdit = viewable(p, doubt) && voteCounterEdit();
+          return approved(p) && (contentEdit || acceptEdit || voteEdit);
         }
 
         function voteCounterEdit() {
-          let path = /databases/$(database)/documents/votes/$(  'a_' + answerId + '_' + request.auth.uid);
+          let path = /databases/$(database)/documents/votes/$('a_' + answerId + '_' + request.auth.uid);
           return request.resource.data.diff(resource.data).affectedKeys()
               .hasOnly(['upvotes', 'downvotes'])
             && request.resource.data.upvotes is number
@@ -378,6 +384,29 @@ service cloud.firestore {
             && request.resource.data.downvotes >= 0
             && request.resource.data.upvotes - resource.data.upvotes == expectedUpDelta(path)
             && request.resource.data.downvotes - resource.data.downvotes == expectedDownDelta(path);
+        }
+
+        /** Posting an answer must bump the doubt's `answersCount` by exactly 1. */
+        function answerCounterMovesOnCreate() {
+          let doubt = doubtDoc(doubtId);
+          let after = getAfter(doubtPath(doubtId)).data;
+          return after.answersCount == doubt.answersCount + 1
+            && after.lastAnswerId == answerId;
+        }
+
+        /**
+         * Removing an answer must drop the doubt's `answersCount` by exactly
+         * 1 - unless the doubt itself is going away in the same batch, in
+         * which case `getAfter()` would look at a document that no longer
+         * exists and the whole cascade would be refused. The `||` is ordered
+         * so that path is never probed first.
+         */
+        function answerCounterMovesOnDelete() {
+          let parent = doubtPath(doubtId);
+          return !existsAfter(parent)
+            || (exists(parent)
+                && getAfter(parent).data.answersCount == get(parent).data.answersCount - 1
+                && getAfter(parent).data.lastAnswerId == answerId);
         }
 
         allow get, list: if canView(doubtDoc(doubtId));
@@ -397,14 +426,6 @@ service cloud.firestore {
           && saneTime(request.resource.data.createdAtMs)
           && answerCounterMovesOnCreate();
 
-        /** Posting an answer must bump the doubt's `answersCount` by exactly 1. */
-        function answerCounterMovesOnCreate() {
-          let doubt = doubtDoc(doubtId);
-          let after = getAfter(doubtPath(doubtId)).data;
-          return after.answersCount == doubt.answersCount + 1
-            && after.lastAnswerId == answerId;
-        }
-
         allow update: if answerUpdateAllowed();
 
         allow delete: if approved(caller()) && (
@@ -413,18 +434,24 @@ service cloud.firestore {
             || admin(caller())
           )
           && answerCounterMovesOnDelete();
-
-        /** Removing an answer must drop the doubt's `answersCount` by exactly 1. */
-        function answerCounterMovesOnDelete() {
-          let doubt = doubtDoc(doubtId);
-          let after = getAfter(doubtPath(doubtId)).data;
-          return after.answersCount == doubt.answersCount - 1
-            && after.lastAnswerId == answerId;
-        }
       }
 
       // ---------------------------------------------------------- comments
       match /comments/{commentId} {
+
+        /**
+         * Deleting a comment cascades with its answer: the answer's author
+         * clears their own thread even when the comment belongs to someone
+         * else. The probe runs against the pre-write state, so it still sees
+         * the answer while that answer is being removed in the same batch.
+         */
+        function onOwnAnswer() {
+          let answerId = resource.data.answerId;
+          return answerId is string && answerId != ''
+            && exists(answerPath(doubtId, answerId))
+            && get(answerPath(doubtId, answerId)).data.authorId == request.auth.uid;
+        }
+
         allow get, list: if canView(doubtDoc(doubtId));
 
         allow create: if approved(caller())
@@ -444,12 +471,14 @@ service cloud.firestore {
           && request.resource.data.content is string
           && request.resource.data.content.size() > 0;
 
-        /** Own comments, anything a moderator removes, and a doubt author
-         *  clearing their own question's thread when the doubt is deleted. */
+        /** Own comments, anything a moderator removes, a doubt author clearing
+         *  their own question's thread, and the author of the answer a comment
+         *  hangs off. */
         allow delete: if approved(caller())
           && (resource.data.authorId == request.auth.uid
             || doubtDoc(doubtId).authorId == request.auth.uid
-            || admin(caller()));
+            || admin(caller())
+            || onOwnAnswer());
       }
     }
 
@@ -457,8 +486,9 @@ service cloud.firestore {
     match /votes/{voteId} {
 
       function expectedVoteId(v) {
-        if (v.targetType == 'doubt') { return 'd_' + v.targetId + '_' + request.auth.uid; }
-        return 'a_' + v.targetId + '_' + request.auth.uid;
+        return v.targetType == 'doubt'
+          ? 'd_' + v.targetId + '_' + request.auth.uid
+          : 'a_' + v.targetId + '_' + request.auth.uid;
       }
 
       function validVote(v) {
@@ -471,8 +501,9 @@ service cloud.firestore {
       }
 
       function voteParent(v) {
-        if (v.targetType == 'doubt') { return doubtPath(v.targetId); }
-        return answerPath(v.doubtId, v.targetId);
+        return v.targetType == 'doubt'
+          ? doubtPath(v.targetId)
+          : answerPath(v.doubtId, v.targetId);
       }
 
       /**

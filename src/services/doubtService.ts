@@ -119,7 +119,7 @@ export const doubtService = {
     const uid = actorId ?? requireServiceActor();
     try {
       const [doubts, votes] = await Promise.all([
-        viaAdapter(() => getContentAdapter().listDoubts()),
+        viaAdapter(() => getContentAdapter().listDoubts(uid)),
         viaAdapter(() => getContentAdapter().listVotes(uid))
       ]);
       store.set(prev => ({

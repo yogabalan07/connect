@@ -338,9 +338,36 @@ function voteIdFor(targetType: VoteWrite['targetType'], targetId: string, actorI
 
 export const firebaseContentAdapter: ContentAdapter = {
   // ---------------------------------------------------------------- Doubts
-  async listDoubts(): Promise<Doubt[]> {
-    const snapshot = await getDocs(collection(db(), DOUBTS));
-    return snapshot.docs.map(item => toDoubt(readSnapshot(item), item.id));
+  /**
+   * The feed, read as three scoped queries rather than one collection pull.
+   *
+   * Firestore proves a `list` request against the query's *potential* result
+   * set, not against the documents that come back, so a rule that inspects a
+   * field can only be satisfied by a query that constrains that same field.
+   * `firestore.rules` gates `doubts` on the private-doubt predicate
+   * (public OR author OR invited OR admin), which leaves three shapes a
+   * non-admin query can prove: one per field branch. They are merged here,
+   * and the sort/filter the feed needs already happens in the service layer.
+   *
+   * Every query is a single equality filter, so each is served by the
+   * automatic single-field index - no composite index is required.
+   */
+  async listDoubts(actorId: string): Promise<Doubt[]> {
+    const doubts = collection(db(), DOUBTS);
+    const [visibleToEveryone, own, invited] = await Promise.all([
+      getDocs(query(doubts, where('visibility', '==', 'public'))),
+      getDocs(query(doubts, where('authorId', '==', actorId))),
+      getDocs(query(doubts, where('allowedUserIds', 'array-contains', actorId)))
+    ]);
+
+    const merged = new Map<string, Doubt>();
+    for (const snapshot of [visibleToEveryone, own, invited]) {
+      for (const item of snapshot.docs) {
+        const doubt = toDoubt(readSnapshot(item), item.id);
+        merged.set(doubt.id, doubt);
+      }
+    }
+    return Array.from(merged.values());
   },
 
   async getDoubt(id: string): Promise<Doubt | null> {
@@ -370,11 +397,18 @@ export const firebaseContentAdapter: ContentAdapter = {
   },
 
   async deleteDoubt(id: string): Promise<void> {
-    const answers = await getDocs(collection(db(), DOUBTS, id, ANSWERS));
+    // Answers and comments go with the doubt in one atomic batch: the rules
+    // refuse an answer whose parent survives with a stale `answersCount`, and
+    // a comment left behind would be unreadable (its guard `get()`s a doubt
+    // that no longer exists) as well as undeletable.
+    const [answers, comments] = await Promise.all([
+      getDocs(collection(db(), DOUBTS, id, ANSWERS)),
+      getDocs(commentsCollection(id))
+    ]);
     const batch = writeBatch(db());
     batch.delete(doubtRef(id));
     let ops = 1;
-    for (const item of answers.docs) {
+    for (const item of [...answers.docs, ...comments.docs]) {
       if (ops >= MAX_BATCH_DELETES) break;
       batch.delete(item.ref);
       ops += 1;
