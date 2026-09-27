@@ -1,4 +1,15 @@
-import type { Answer, Category, Comment, Doubt, Notification, Tag } from '../types';
+import type {
+  Answer,
+  BadgeDefinition,
+  Category,
+  Comment,
+  Doubt,
+  Follow,
+  Notification,
+  ReputationEvent,
+  Tag,
+  UserBadge
+} from '../types';
 import { firebaseContentAdapter } from './firebaseContentAdapter';
 
 /**
@@ -125,6 +136,42 @@ export interface UserVotes {
   answers: Record<string, VoteValue>;
 }
 
+/**
+ * A reputation milestone the caller has just earned.
+ *
+ * The adapter - not the caller - derives the deterministic document id and
+ * the point value, and `firestore.rules` recomputes both independently, so
+ * nothing in this shape can be used to claim a score.
+ */
+export type ReputationEventDraft =
+  | { type: 'question'; doubtId: string; userId: string }
+  | { type: 'answer'; doubtId: string; answerId: string; userId: string }
+  | { type: 'accepted'; doubtId: string; answerId: string; userId: string; actorId: string };
+
+/** A badge row the caller has proved they qualify for. */
+export interface UserBadgeDraft {
+  badgeId: string;
+  uid: string;
+  sourceId: string;
+  doubtId?: string;
+}
+
+export interface FollowQuery {
+  /** Bounded page size; the default keeps a profile read to one round-trip. */
+  limit?: number;
+}
+
+/**
+ * Ledger query. `vote` rows name the member who cast the vote, which is
+ * exactly what `votes/…` keeps private, so `firestore.rules` only opens them
+ * to the two people involved - asking for them on somebody else's history is
+ * refused rather than silently honoured.
+ */
+export interface ReputationQuery {
+  limit?: number;
+  includeVotes?: boolean;
+}
+
 export interface ContentAdapter {
   // ------------------------------------------------------------------ Doubts
   /** Every doubt the caller is allowed to see (rules filter server-side). */
@@ -182,6 +229,39 @@ export interface ContentAdapter {
   setFollowing(actorId: string, userId: string, following: boolean): Promise<void>;
   listFollowingTagIds(actorId: string): Promise<string[]>;
   setTagFollowing(actorId: string, tagId: string, following: boolean): Promise<void>;
+
+  // -------------------------------------------------------- Social graph
+  /** Follow edges pointing at `userId` (its followers), newest first. */
+  listFollowers(userId: string, query?: FollowQuery): Promise<Follow[]>;
+  /** Follow edges written by `userId` (who it follows), newest first. */
+  listFollowing(userId: string, query?: FollowQuery): Promise<Follow[]>;
+  /** Derived from `follows` - never a counter anyone can write. */
+  countFollowers(userId: string): Promise<number>;
+  countFollowing(userId: string): Promise<number>;
+
+  // ------------------------------------------------------ Reputation ledger
+  listReputationEvents(userId: string, query?: ReputationQuery): Promise<ReputationEvent[]>;
+  /** `sum(reputationEvents.delta)` for one member - the reputation number. */
+  sumReputation(userId: string): Promise<number>;
+  /** `count(reputationEvents where type == 'accepted')` for one member. */
+  countAccepted(userId: string): Promise<number>;
+  /**
+   * Books a milestone AND the score it earns in one transaction: the
+   * deterministic id plus `firestore.rules`'s "minted in this commit" check
+   * is what makes a second claim of the same work impossible.
+   */
+  createReputationEvent(actorId: string, draft: ReputationEventDraft): Promise<ReputationEvent>;
+
+  // -------------------------------------------------------------- Statistics
+  /** `count(doubts where authorId == …)` / collection-group answer count. */
+  countDoubtsBy(authorId: string): Promise<number>;
+  countAnswersBy(authorId: string): Promise<number>;
+
+  // ------------------------------------------------------------------ Badges
+  /** The badge catalogue (`badges/{id}`); empty when nobody curated one. */
+  listBadgeDefinitions(): Promise<BadgeDefinition[]>;
+  listUserBadges(uid: string): Promise<UserBadge[]>;
+  createUserBadge(draft: UserBadgeDraft): Promise<UserBadge>;
 
   // ----------------------------------------------------------------- Catalog
   listCategories(): Promise<Category[]>;

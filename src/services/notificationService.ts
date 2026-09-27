@@ -98,9 +98,21 @@ export const notificationService = {
   async notify(
     recipientId: string,
     actor: NotifyActor,
-    draft: { type: Notification['type']; title: string; message: string; link?: string }
+    draft: {
+      type: Notification['type'];
+      title: string;
+      message: string;
+      link?: string;
+      /** Required by the rules for `badge` / `reputation` events. */
+      sourceId?: string;
+    }
   ): Promise<Notification | null> {
-    if (!recipientId || !actor?.id || recipientId === actor.id) return null;
+    if (!recipientId || !actor?.id) return null;
+    // Awards are the one family of events a member legitimately sends to
+    // their own inbox - `firestore.rules` allows exactly these two kinds to
+    // be self-addressed, and pins both to a document that proves them.
+    const selfAddressed = draft.type === 'badge' || draft.type === 'reputation';
+    if (!selfAddressed && recipientId === actor.id) return null;
     return notificationService.push({
       userId: recipientId,
       senderId: actor.id,
@@ -113,6 +125,7 @@ export const notificationService = {
       title: draft.title,
       message: draft.message,
       link: draft.link,
+      sourceId: draft.sourceId,
       timestamp: 'Just now',
       read: false
     });
@@ -122,7 +135,13 @@ export const notificationService = {
   async notifyAll(
     recipients: string[],
     actor: NotifyActor,
-    draft: { type: Notification['type']; title: string; message: string; link?: string }
+    draft: {
+      type: Notification['type'];
+      title: string;
+      message: string;
+      link?: string;
+      sourceId?: string;
+    }
   ): Promise<Notification[]> {
     const created: Notification[] = [];
     for (const recipientId of Array.from(new Set(recipients))) {
@@ -181,6 +200,32 @@ export const notificationService = {
       title: 'New Follower',
       message: `${actor.name} (${actorProfile}) started following you.`,
       link: `/app/users/${actor.id}`
+    });
+  },
+
+  /**
+   * Self-addressed award events. `sourceId` is the `userBadges/{uid}_{badge}`
+   * / `reputationEvents/{id}` row the rules re-read, so the notification can
+   * only ever celebrate something that was actually granted.
+   */
+  notifyBadgeEarned(recipientId: string, actor: NotifyActor, badgeName: string, badgeId: string) {
+    return notificationService.notify(recipientId, actor, {
+      type: 'badge',
+      title: `Badge unlocked: ${badgeName}`,
+      message: `${actor.name} earned the ${badgeName} badge on Connect.`,
+      link: `/app/reputation`,
+      sourceId: badgeId
+    });
+  },
+
+  notifyReputation(recipientId: string, actor: NotifyActor, delta: number, reason: string, sourceId: string) {
+    const sign = delta >= 0 ? '+' : '';
+    return notificationService.notify(recipientId, actor, {
+      type: 'reputation',
+      title: `Reputation ${sign}${delta}`,
+      message: reason,
+      link: '/app/reputation',
+      sourceId
     });
   },
 

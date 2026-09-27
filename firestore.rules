@@ -14,6 +14,16 @@ rules_version = '2';
 //   tagFollows/{tagId}_{uid}     topic subscriptions
 //   categories/{id}, tags/{id}   reference data (admin-managed)
 //   notifications/{id}           per-member inbox
+//   badges/{id}                  badge catalogue (admin-managed)
+//   userBadges/{uid}_{badgeId}   badges a member really holds
+//   reputationEvents/{id}        the reputation ledger (see below)
+//
+// Reputation
+//   `reputation` is never stored on `users/{uid}` in a form a client can
+//   move: the profile's number is an aggregation over two collections at
+//   read time (`reputationEvents.delta` and nothing else). Every event is
+//   validated against the very document it claims to reward, so the ledger
+//   can only ever contain points that were actually earned.
 //
 // Language shape
 //   A rules function may hold at most ten `let` bindings and must end in a
@@ -96,8 +106,55 @@ service cloud.firestore {
       return /databases/$(database)/documents/doubts/$(doubtId)/answers/$(answerId);
     }
 
+    function commentPath(doubtId, commentId) {
+      return /databases/$(database)/documents/doubts/$(doubtId)/comments/$(commentId);
+    }
+
     function doubtDoc(id) {
       return get(doubtPath(id)).data;
+    }
+
+    function reputationEventPath(id) {
+      return /databases/$(database)/documents/reputationEvents/$(id);
+    }
+
+    function memberStatus(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data.status;
+    }
+
+    /** Canonical `votes/{id}` a `vote` reputation event must agree with. */
+    function voteDocPath(type, targetId, voterUid) {
+      return /databases/$(database)/documents/votes/$((type == 'doubt' ? 'd_' : 'a_') + targetId + '_' + voterUid);
+    }
+
+    /**
+     * Points one vote is worth to the content's author. A withdrawn vote
+     * (`value == 0`) is worth nothing, which is what lets a retraction drop
+     * the score back to where it started without deleting a ledger row.
+     */
+    function voteReward(targetType, value) {
+      return value == 0
+        ? 0
+        : (targetType == 'doubt'
+            ? (value == 1 ? 5 : -2)
+            : (value == 1 ? 10 : -2));
+    }
+
+    /**
+     * Badges a client may ever hold. Hard-coded rather than read from the
+     * catalogue so an award never depends on a document a moderator happens
+     * to have created first - and so an unknown id is refused at the door.
+     */
+    function knownBadge(id) {
+      return id in [
+        'first_doubt',
+        'first_answer',
+        'first_accepted',
+        'first_comment',
+        'helpful_contributor',
+        'active_contributor',
+        'top_contributor'
+      ];
     }
 
     /**
@@ -120,7 +177,11 @@ service cloud.firestore {
 
     // ------------------------------------------------------------- users
 
-    /** `EditableProfilePatch` - what a member may change on their own record. */
+    /**
+     * `EditableProfilePatch` - what a member may change on their own record.
+     * The three links are plain display data; reputation, badges, counters,
+     * `role` and `status` are all deliberately absent.
+     */
     function ownerEditableKeys() {
       return [
         'displayName',
@@ -132,6 +193,9 @@ service cloud.firestore {
         'photoURL',
         'coverImage',
         'skills',
+        'github',
+        'linkedin',
+        'website',
         'updatedAt'
       ];
     }
@@ -157,10 +221,63 @@ service cloud.firestore {
         && request.resource.data.role == 'student'
         && request.resource.data.status == 'pending';
 
+      /**
+       * Book a reputation credit onto a member's public score.
+       *
+       * `firestore.rules` already recomputed `delta` from the work the event
+       * points at (`reputationEventValid`), so what is left to prove is that
+       * the event names `uid` as its beneficiary and that this write applies
+       * it exactly once:
+       *
+       * - a milestone (`question` / `answer` / `accepted`) must be minted in
+       *   THIS commit (`!exists && existsAfter`) - the deterministic id makes
+       *   a second application impossible even later;
+       * - a `vote` is a running total, so it is applied from the voter's own
+       *   `votes/{…}` document as it stood before and after this commit. Only
+       *   an actual `saveVote` can move that number, and only by the exact
+       *   reward `voteReward()` returns - which is also what makes a
+       *   withdrawal drop the score back by the same amount.
+       *
+       * Nothing here can throw: `reputationEventPath` is only reached once
+       * `ref` is a non-empty string, and every other lookup is guarded.
+       */
+      function voteCredit(ev) {
+        let vp = voteDocPath(ev.targetType, ev.targetId, request.auth.uid);
+        let after = existsAfter(vp) ? getAfter(vp).data.value : 0;
+        let prior = exists(vp) ? get(vp).data.value : 0;
+        return voteReward(ev.targetType, after) - voteReward(ev.targetType, prior);
+      }
+
+      function reputationCreditEdit() {
+        let ref = 'reputationEventRef' in request.resource.data
+          ? request.resource.data.reputationEventRef : '';
+        let path = ref is string && ref.size() > 0
+          ? reputationEventPath(ref)
+          : /databases/$(database)/documents/nowhere;
+        let before = 'reputation' in resource.data ? resource.data.reputation : 0;
+        let good = 'reputation' in request.resource.data
+          ? request.resource.data.reputation : -1;
+        let diff = request.resource.data.diff(resource.data).affectedKeys();
+        return approved(caller())
+          && diff.hasOnly(['reputation', 'reputationEventRef'])
+          && ref is string
+          && ref.size() > 0
+          && good is number
+          && good >= 0
+          && existsAfter(path)
+          && getAfter(path).data.userId == uid
+          && (getAfter(path).data.type in ['question', 'answer', 'accepted']
+              ? (!exists(path) && good - before == getAfter(path).data.delta)
+              : (getAfter(path).data.type == 'vote'
+                  && getAfter(path).data.voterId == request.auth.uid
+                  && good - before == voteCredit(getAfter(path).data)));
+      }
+
       allow update: if
         (signedIn()
           && request.auth.uid == uid
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(ownerEditableKeys()))
+        || reputationCreditEdit()
         || (admin(caller())
           && request.auth.uid != uid
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(adminOnlyKeys()));
@@ -410,7 +527,16 @@ service cloud.firestore {
                 && getAfter(parent).data.lastAnswerId == answerId);
         }
 
-        allow get, list: if canView(doubtDoc(doubtId));
+        /**
+         * The author-own branch is listed FIRST on purpose: a collection-group
+         * query (`collectionGroup('answers').where('authorId','==',uid)`, which
+         * is how the profile derives its answer count) proves exactly that
+         * conjunction, and `||` short-circuits before `doubtDoc()` - which
+         * would throw on an orphan - is ever reached. An unfiltered query can
+         * prove neither side and is still refused.
+         */
+        allow get, list: if (approved(caller()) && resource.data.authorId == request.auth.uid)
+          || canView(doubtDoc(doubtId));
 
         allow create: if approved(caller())
           && request.resource.data.id == answerId
@@ -562,14 +688,30 @@ service cloud.firestore {
     }
 
     // ------------------------------------------------------------- follows
+    /**
+     * `follows/{targetUid}_{followerUid}`.
+     *
+     * Read is deliberately open to every approved member (not just the two
+     * endpoints): a profile has to be able to render *someone else's*
+     * followers / following lists, and the edge carries nothing private -
+     * who follows whom is public on every campus network. The write side is
+     * where the real constraints live:
+     *   - only the caller can create an edge they are the follower in,
+     *   - no self-follow,
+     *   - the target must be an approved member (you cannot follow a
+     *     pending, rejected or blocked account, nor a deleted one),
+     *   - `update` is never granted, so an edge can never be re-pointed at
+     *     a different target after the fact.
+     */
     match /follows/{followId} {
-      allow read: if approved(caller()) && resource.data.userId == request.auth.uid;
+      allow read: if approved(caller());
 
       allow create: if approved(caller())
         && followId == request.resource.data.targetUserId + '_' + request.auth.uid
         && request.resource.data.userId == request.auth.uid
         && request.resource.data.targetUserId is string
         && request.resource.data.targetUserId != request.auth.uid
+        && memberStatus(request.resource.data.targetUserId) == 'approved'
         && saneTime(request.resource.data.createdAtMs);
 
       allow delete: if approved(caller())
@@ -636,19 +778,35 @@ service cloud.firestore {
        * - `follow` must agree with a `follows/{target}_{uid}` document the
        *   caller really created, which is what stops a fabricated
        *   "you have a new follower".
+       * - `badge` and `reputation` are the ONLY self-addressed kinds, and
+       *   both are pinned to a document that proves the award: the member's
+       *   `userBadges/{uid}_{badgeId}` row, and the reputation event that
+       *   actually credited them. Telling yourself you won a badge you never
+       *   earned is therefore refused at the door.
        */
       function eventAllowed(d) {
         return d.type in ['mention', 'answer', 'accepted', 'comment']
           || (d.type in ['admin_approval', 'announcement'] && admin(caller()))
           || (d.type == 'follow'
-              && exists(/databases/$(database)/documents/follows/$(d.userId + '_' + request.auth.uid)));
+              && exists(/databases/$(database)/documents/follows/$(d.userId + '_' + request.auth.uid)))
+          || (d.type == 'reputation'
+              && d.userId == request.auth.uid
+              && d.sourceId is string
+              && get(reputationEventPath(d.sourceId)).data.userId == request.auth.uid)
+          || (d.type == 'badge'
+              && d.userId == request.auth.uid
+              && d.sourceId is string
+              && exists(/databases/$(database)/documents/userBadges/$(d.userId + '_' + d.sourceId)));
       }
 
       allow read: if approved(caller()) && resource.data.userId == request.auth.uid;
 
       allow create: if approved(caller())
         && request.resource.data.userId is string
-        && request.resource.data.userId != request.auth.uid
+        // Only the two self-addressed award kinds may name their own inbox;
+        // everything else still has to be somebody else's.
+        && (request.resource.data.userId != request.auth.uid
+          || request.resource.data.type in ['badge', 'reputation'])
         // `senderId` is the identity of whoever caused the event and can only
         // ever be the caller; `source` is stamped `client` by the adapter, so
         // a browser cannot claim to be a trusted server process.
@@ -656,7 +814,8 @@ service cloud.firestore {
         && request.resource.data.senderId == request.auth.uid
         && request.resource.data.source == 'client'
         && request.resource.data.type in [
-          'mention', 'answer', 'accepted', 'follow', 'comment', 'admin_approval', 'announcement'
+          'mention', 'answer', 'accepted', 'follow', 'comment',
+          'admin_approval', 'announcement', 'badge', 'reputation'
         ]
         && eventAllowed(request.resource.data)
         && request.resource.data.senderName is string
@@ -678,6 +837,219 @@ service cloud.firestore {
         && request.resource.data.read is bool;
 
       allow delete: if approved(caller()) && resource.data.userId == request.auth.uid;
+    }
+
+    // -------------------------------------------------- reputation ledger
+    /**
+     * `reputationEvents/{eventId}` - the only representation of reputation
+     * this product trusts.
+     *
+     * Every event is a small, rules-proven claim about work that really
+     * happened, and the id is a pure function of that work, so the same
+     * milestone can never be booked twice:
+     *
+     *   question_{doubtId}_{uid}            +5   you asked it
+     *   answer_{doubtId}_{answerId}_{uid}   +10  you answered it
+     *   accepted_{answerId}_{uid}           +15  your answer was accepted
+     *   vote_{targetId}_{voterUid}          +5/+10/-2  somebody voted
+     *
+     * The client never gets to choose `delta`: each branch below recomputes
+     * it from the document the event points at, then compares. `update` is
+     * only open for `vote` events (a voter may flip their own vote, which
+     * changes the reward), and only the voter who cast it may do so.
+     *
+     * Not clawed back: reputation earned on a question/answer survives that
+     * document's deletion. The event was proven when it was written, and a
+     * moderation clawback belongs to a trusted backend, not to the browser.
+     */
+    match /reputationEvents/{eventId} {
+
+      function questionEvent(d) {
+        return d.type == 'question'
+          && d.delta == 5
+          && d.userId == request.auth.uid
+          && d.actorId == request.auth.uid
+          && d.doubtId == d.sourceId
+          && eventId == 'question_' + d.sourceId + '_' + request.auth.uid
+          && getAfter(doubtPath(d.sourceId)).data.authorId == request.auth.uid;
+      }
+
+      function answerEvent(d) {
+        return d.type == 'answer'
+          && d.delta == 10
+          && d.userId == request.auth.uid
+          && d.actorId == request.auth.uid
+          && eventId == 'answer_' + d.doubtId + '_' + d.sourceId + '_' + request.auth.uid
+          && getAfter(answerPath(d.doubtId, d.sourceId)).data.authorId == request.auth.uid;
+      }
+
+      /**
+       * The acceptor is the caller, the beneficiary is the answer's author,
+       * and the answer really is the accepted one *after* this write - which
+       * is the same proof `doubts.acceptedAnswerId` relies on.
+       */
+      function acceptedEvent(d) {
+        return d.type == 'accepted'
+          && d.delta == 15
+          && d.actorId == request.auth.uid
+          && d.userId != request.auth.uid
+          && eventId == 'accepted_' + d.sourceId + '_' + d.userId
+          && getAfter(answerPath(d.doubtId, d.sourceId)).data.authorId == d.userId
+          && getAfter(answerPath(d.doubtId, d.sourceId)).data.isAccepted == true;
+      }
+
+      /**
+       * `getAfter` rather than `get`: the vote document, the event and the
+       * beneficiary's score are written in ONE commit, so the only value that
+       * can be trusted here is the one that will exist afterwards. A separate
+       * request would read the same post-commit state, so both timings prove.
+       */
+      function voteEventProof(d) {
+        return d.targetType in ['doubt', 'answer']
+          && d.value in [-1, 0, 1]
+          && d.voterId == request.auth.uid
+          && eventId == 'vote_' + d.targetId + '_' + d.voterId
+          // A withdrawn vote keeps its ledger row with `delta: 0` so the
+          // sum drops back without needing a delete (and without a read).
+          && (d.value == 0
+            ? d.delta == 0
+            : (d.userId != d.voterId
+                && getAfter(voteDocPath(d.targetType, d.targetId, d.voterId)).data.userId == d.voterId
+                && getAfter(voteDocPath(d.targetType, d.targetId, d.voterId)).data.targetId == d.targetId
+                && getAfter(voteDocPath(d.targetType, d.targetId, d.voterId)).data.value == d.value
+                && getAfter(voteDocPath(d.targetType, d.targetId, d.voterId)).data.doubtId == d.doubtId
+                && voteParentAuthor(d) == d.userId
+                && d.delta == voteReward(d.targetType, d.value)));
+      }
+
+      /** The author whose reputation a `vote` event credits. */
+      function voteParentAuthor(d) {
+        return d.targetType == 'doubt'
+          ? get(doubtPath(d.targetId)).data.authorId
+          : get(answerPath(d.doubtId, d.targetId)).data.authorId;
+      }
+
+      /** Type first, so each branch is only ever evaluated for its own kind. */
+      function voteEvent(d) {
+        return d.type == 'vote' && voteEventProof(d);
+      }
+
+      /**
+       * The whole shape is declared up front: nothing below can trip over a
+       * missing field, and an abbreviated event is refused outright.
+       */
+      function reputationEventValid(d) {
+        return approved(caller())
+          && d.id == eventId
+          && d.userId is string
+          && d.type in ['question', 'answer', 'accepted', 'vote']
+          && d.delta is number
+          && d.sourceId is string
+          && d.doubtId is string
+          && d.actorId is string
+          && d.voterId is string
+          && d.targetType is string
+          && d.targetId is string
+          && d.value is number
+          && saneTime(d.createdAtMs)
+          && (questionEvent(d) || answerEvent(d) || acceptedEvent(d) || voteEvent(d));
+      }
+
+      /**
+       * Read is bounded by identity for the rows that carry a secret, and
+       * open for the rows that do not. `question` / `answer` / `accepted`
+       * events restate a fact the whole campus can already see on the doubt
+       * page, so any approved member may count them off a profile. A `vote`
+       * row names the member who cast it, which is exactly what the `votes`
+       * collection keeps private - so a vote row stays between its voter and
+       * its beneficiary. A query that does not pin `type` therefore fails for
+       * anybody but the two of them, which is the intended fail-closed
+       * behaviour (see `ReputationPage` / `profileService`).
+       *
+       * `!resource.exists` is listed first so a single-document probe can ask
+       * "has this milestone already been booked?" and get an honest answer:
+       * for a query every potential result exists, so it never weakens the
+       * filter above it - it only stops `resource.data` from throwing.
+       */
+      allow read: if approved(caller())
+        && (!resource.exists
+          || resource.data.type != 'vote'
+          || resource.data.userId == request.auth.uid
+          || resource.data.voterId == request.auth.uid);
+
+      allow create: if reputationEventValid(request.resource.data);
+
+      /**
+       * Re-writing an event has to pass the exact same proof as creating it,
+       * and every proof is pinned to the actor who earned it (the earner's
+       * own uid, the acceptor's uid, the voter's uid) and to the id derived
+       * from that same work. So a retry is idempotent, while changing the
+       * amount, the beneficiary or the source is refused.
+       */
+      allow update: if reputationEventValid(request.resource.data);
+
+      allow delete: if approved(caller())
+        && resource.data.type == 'vote'
+        && resource.data.voterId == request.auth.uid;
+    }
+
+    // -------------------------------------------------------------- badges
+    /**
+     * `badges/{badgeId}` - the catalogue. Members read it to render the
+     * profile, only a moderator may add or restate a badge.
+     */
+    match /badges/{badgeId} {
+      allow read: if approved(caller());
+
+      allow create, update, delete: if approved(caller()) && admin(caller());
+    }
+
+    /**
+     * `userBadges/{uid}_{badgeId}` - a badge a member really holds.
+     *
+     * The award is always self-service (you claim what you earned) but never
+     * self-declared: `badgeCriterion()` re-reads the document that proves the
+     * milestone, and threshold badges - which need a count Firestore rules
+     * cannot take - are moderator-only by construction.
+     */
+    match /userBadges/{userBadgeId} {
+
+      function acceptedEventIsMine(sourceId) {
+        let event = getAfter(reputationEventPath(sourceId)).data;
+        return event.type == 'accepted' && event.userId == request.auth.uid;
+      }
+
+      function badgeCriterion(d) {
+        return d.badgeId == 'first_doubt'
+          ? (d.sourceId is string
+              && getAfter(doubtPath(d.sourceId)).data.authorId == request.auth.uid)
+          : d.badgeId == 'first_answer'
+          ? (d.doubtId is string && d.sourceId is string
+              && getAfter(answerPath(d.doubtId, d.sourceId)).data.authorId == request.auth.uid)
+          : d.badgeId == 'first_accepted'
+          ? (d.sourceId is string && acceptedEventIsMine(d.sourceId))
+          : d.badgeId == 'first_comment'
+          ? (d.doubtId is string && d.sourceId is string
+              && getAfter(commentPath(d.doubtId, d.sourceId)).data.authorId == request.auth.uid)
+          : admin(caller());
+      }
+
+      allow read: if approved(caller());
+
+      allow create: if approved(caller())
+        && request.resource.data.uid == request.auth.uid
+        && userBadgeId == request.resource.data.uid + '_' + request.resource.data.badgeId
+        && request.resource.data.badgeId is string
+        && request.resource.data.badgeId.size() > 0
+        && request.resource.data.sourceId is string
+        && knownBadge(request.resource.data.badgeId)
+        && saneTime(request.resource.data.awardedAtMs)
+        && badgeCriterion(request.resource.data);
+
+      /** A held badge is evidence: it is never edited, only granted/retired. */
+      allow update: if false;
+
+      allow delete: if approved(caller()) && admin(caller());
     }
 
     // ------------------------------------------------------- everything else

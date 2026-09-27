@@ -23,9 +23,12 @@ import { bootstrapServices } from '../services';
 import {
   adminService,
   answerService,
+  badgeService,
   catalogService,
   doubtService,
   notificationService,
+  profileService,
+  reputationService,
   socialService
 } from '../services';
 import { userService, type EditableProfilePatch } from '../services/userService';
@@ -243,6 +246,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
+  /**
+   * Reputation and badge bookkeeping runs *after* the content that earns
+   * them has already committed, so a refusal there must not turn a
+   * successful post into an error - but it must not be silent either, or
+   * the number the member is looking at would simply be wrong.
+   */
+  const bookIfPossible = useCallback(async (task: () => Promise<unknown>): Promise<void> => {
+    try {
+      await task();
+    } catch (error) {
+      toastStore.add(`Posted, but the reward could not be booked: ${errorMessage(error)}`, 'info');
+    }
+  }, []);
+
   // ---------------------------------------------------------------- Doubts
   const createDoubt = useCallback(
     async (input: CreateDoubtInput): Promise<string> => {
@@ -254,7 +271,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           mentions: mentions.handles,
           mentionIds: mentions.ids
         });
-        userService.adjustStats(user.id, { questionsCount: 1, reputation: 5 });
+        userService.adjustStats(user.id, { questionsCount: 1 });
         await catalogService.adjustQuestionCount(doubt.category, 1);
         logDoubtAction(user, doubt.title, doubt.visibility);
         await bestEffort(() =>
@@ -265,6 +282,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             input.description
           )
         );
+        await bookIfPossible(async () => {
+          await reputationService.record({ type: 'question', doubtId: doubt.id, userId: user.id });
+          await badgeService.claimFirstDoubt(doubt.id, user.id);
+          profileService.invalidateProfile(user.id);
+        });
         toastStore.add('Your doubt was posted to the campus hub!', 'success');
         return doubt.id;
       } catch (error) {
@@ -338,8 +360,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       runAsync(async user => {
         const doubt = doubtService.getById(doubtId);
         const mentions = mentionsFor(content, userService.getUsers());
-        await answerService.add(doubtId, user, content, codeSnippet, mentions.handles, mentions.ids);
-        userService.adjustStats(user.id, { answersCount: 1, reputation: 10 });
+        const created = await answerService.add(
+          doubtId,
+          user,
+          content,
+          codeSnippet,
+          mentions.handles,
+          mentions.ids
+        );
+        userService.adjustStats(user.id, { answersCount: 1 });
 
         if (doubt) {
           await bestEffort(() =>
@@ -349,6 +378,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await bestEffort(() =>
           notificationService.notifyMentions(mentions.ids, user, `/app/doubts/${doubtId}`, content)
         );
+        await bookIfPossible(async () => {
+          await reputationService.record({
+            type: 'answer',
+            doubtId,
+            answerId: created.id,
+            userId: user.id
+          });
+          await badgeService.claimFirstAnswer(user.id, doubtId, created.id);
+          profileService.invalidateProfile(user.id);
+        });
 
         toastStore.add('Your solution has been submitted!', 'success');
       }),
@@ -370,7 +409,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     (answerId: string) =>
       runAsync(async user => {
         const removed = await answerService.remove(answerId, user);
-        userService.adjustStats(user.id, { answersCount: -1 });
         logAudit(user, 'Deleted answer', removed.id, 'doubt');
         toastStore.add('Answer deleted.', 'info');
       }),
@@ -385,12 +423,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const answer = answerService.getAll().find(a => a.id === answerId);
 
         if (isNowAccepted && answer) {
-          userService.adjustStats(answer.authorId, { reputation: 15, acceptedCount: 1 });
+          userService.adjustStats(answer.authorId, { acceptedCount: 1 });
           await bestEffort(() =>
             notificationService.notifyAcceptedAnswer(answer.authorId, user, doubtId)
           );
+          await bookIfPossible(async () => {
+            const event = await reputationService.record({
+              type: 'accepted',
+              doubtId,
+              answerId,
+              userId: answer.authorId,
+              actorId: user.id
+            });
+            if (event) await badgeService.claimFirstAccepted(answer.authorId, event.id);
+            profileService.invalidateProfile(answer.authorId);
+          });
           toastStore.add('Marked as Accepted Answer! (+15 Reputation awarded)', 'success');
         } else {
+          // Un-accepting does not claw the +15 back (no ledger delete rule)
+          // and does not lower the derived count either - the profile and
+          // the score stay consistent with what was already proven.
           toastStore.add('Unmarked accepted answer.', 'info');
         }
       }),
@@ -416,7 +468,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       runAsync(async user => {
         const doubt = doubtService.getById(doubtId);
         const mentions = mentionsFor(text, userService.getUsers());
-        await answerService.addDoubtComment(
+        const created = await answerService.addDoubtComment(
           doubtId,
           user,
           text,
@@ -432,6 +484,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await bestEffort(() =>
           notificationService.notifyMentions(mentions.ids, user, `/app/doubts/${doubtId}`, text)
         );
+        await bookIfPossible(async () => {
+          await badgeService.claimFirstComment(user.id, doubtId, created.id);
+          profileService.invalidateProfile(user.id);
+        });
         toastStore.add('Comment published.', 'success');
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -444,7 +500,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const answer = answerService.getAll().find(a => a.id === answerId);
         const doubt = answer ? doubtService.getById(answer.doubtId) : null;
         const mentions = mentionsFor(text, userService.getUsers());
-        await answerService.addComment(
+        const created = await answerService.addComment(
           answerId,
           user,
           text,
@@ -468,6 +524,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             notificationService.notifyMentions(mentions.ids, user, `/app/doubts/${doubt.id}`, text)
           );
         }
+        await bookIfPossible(async () => {
+          await badgeService.claimFirstComment(user.id, created.doubtId, created.id);
+          profileService.invalidateProfile(user.id);
+        });
         toastStore.add('Comment published.', 'success');
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -501,6 +561,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const target = userService.getById(userId);
         const nowFollowing = await socialService.toggleFollow(userId);
         userService.adjustStats(userId, { followersCount: nowFollowing ? 1 : -1 });
+        profileService.invalidateProfile(userId);
 
         if (nowFollowing && target) {
           await bestEffort(() =>

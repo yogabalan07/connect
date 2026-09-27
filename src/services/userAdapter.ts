@@ -16,6 +16,19 @@ import { firebaseUserAdapter } from './firebaseUserAdapter';
  * supplied by the caller (which always derives it from an authenticated
  * Firebase user) — never by registration form input.
  */
+/**
+ * Bounded directory search. `term` is matched as a prefix against the
+ * display name and the handle; the rest are equality filters that narrow the
+ * candidate set so the query stays inside one automatic index.
+ */
+export interface UserSearch {
+  term?: string;
+  department?: Department;
+  year?: AcademicYear;
+  status?: UserStatus;
+  limit?: number;
+}
+
 export interface UserAdapter {
   /** Reads `users/{uid}`; `null` when the document does not exist. */
   getUserProfile(uid: string): Promise<User | null>;
@@ -36,6 +49,14 @@ export interface UserAdapter {
   listPendingUsers(): Promise<User[]>;
   /** Single choke point for moderation status transitions. */
   setUserStatus(uid: string, status: UserStatus): Promise<User>;
+  /**
+   * Bounded directory search for the members picker.
+   *
+   * Prefix queries on `username` / `displayName` plus optional equality
+   * filters - never a full collection pull, so the cost is one page instead
+   * of the whole campus. An empty term falls back to a capped browse.
+   */
+  searchUsers(options: UserSearch): Promise<User[]>;
   /** pending -> approved */
   approveUser(uid: string): Promise<User>;
   /** pending -> rejected (the record is kept for audit history). */
@@ -63,7 +84,10 @@ export const EDITABLE_PROFILE_KEYS = [
   'year',
   'section',
   'bio',
-  'skills'
+  'skills',
+  'github',
+  'linkedin',
+  'website'
 ] as const;
 
 export type EditableProfileKey = (typeof EDITABLE_PROFILE_KEYS)[number];
@@ -120,6 +144,9 @@ export interface UserRecord {
   photoURL?: string;
   coverImage?: string;
   skills?: string[];
+  github?: string;
+  linkedin?: string;
+  website?: string;
   createdAt: Date | null;
   updatedAt: Date | null;
 }

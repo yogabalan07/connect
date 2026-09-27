@@ -20,6 +20,9 @@ import { socialService } from './socialService';
 import { catalogService } from './catalogService';
 import { adminService } from './adminService';
 import { reportService } from './reportService';
+import * as badgeService from './badgeService';
+import * as profileService from './profileService';
+import * as reputationService from './reputationService';
 
 let bootstrapped = false;
 
@@ -36,6 +39,7 @@ export function bootstrapServices(): void {
   catalogService.bootstrap();
   adminService.bootstrap();
   reportService.bootstrap();
+  profileService.invalidateProfile();
 }
 
 /**
@@ -61,6 +65,7 @@ export function unloadContent(): void {
   notificationService.bootstrap();
   socialService.bootstrap();
   catalogService.bootstrap();
+  profileService.invalidateProfile();
 }
 
 /** Test seam: restores the pristine boot state across every content store. */
@@ -82,5 +87,8 @@ export {
   socialService,
   catalogService,
   adminService,
-  reportService
+  reportService,
+  badgeService,
+  profileService,
+  reputationService
 };

@@ -23,6 +23,11 @@ export const SettingsPage: React.FC = () => {
   const [bio, setBio] = useState(currentUser?.bio ?? '');
   const [skills, setSkills] = useState(currentUser?.skills.join(', ') ?? '');
   const [section, setSection] = useState(currentUser?.section || 'A');
+  // Public links: owner-editable only, and the only non-standard profile
+  // fields `firestore.rules` lets a member write on their own record.
+  const [github, setGithub] = useState(currentUser?.github ?? '');
+  const [linkedin, setLinkedin] = useState(currentUser?.linkedin ?? '');
+  const [website, setWebsite] = useState(currentUser?.website ?? '');
 
   // Privacy states
   const [messagePrivacy, setMessagePrivacy] = useState<'everyone' | 'following' | 'mentors'>('everyone');
@@ -41,7 +46,10 @@ export const SettingsPage: React.FC = () => {
       name,
       bio,
       section,
-      skills: skills.split(',').map(s => s.trim()).filter(Boolean)
+      skills: skills.split(',').map(s => s.trim()).filter(Boolean),
+      github: github.trim(),
+      linkedin: linkedin.trim(),
+      website: website.trim()
     });
   };
 
@@ -136,6 +144,46 @@ export const SettingsPage: React.FC = () => {
               className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
             />
           </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-1">
+            <div>
+              <label className="text-xs font-semibold text-slate-300 block mb-1">GitHub</label>
+              <input
+                type="text"
+                value={github}
+                onChange={e => setGithub(e.target.value)}
+                placeholder="github.com/username"
+                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-300 block mb-1">LinkedIn</label>
+              <input
+                type="text"
+                value={linkedin}
+                onChange={e => setLinkedin(e.target.value)}
+                placeholder="linkedin.com/in/username"
+                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-semibold text-slate-300 block mb-1">Website</label>
+              <input
+                type="text"
+                value={website}
+                onChange={e => setWebsite(e.target.value)}
+                placeholder="https://example.dev"
+                className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder:text-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono"
+              />
+            </div>
+          </div>
+
+          <p className="text-[11px] text-slate-500 leading-relaxed">
+            Reputation, badge and follower counts are derived from the campus ledger and cannot be
+            edited here.
+          </p>
 
           <div className="pt-2">
             <button

@@ -6,7 +6,8 @@ import type {
   AuthProfileIdentity,
   EditableProfileKey,
   EditableProfilePatch,
-  NewUserProfile
+  NewUserProfile,
+  UserSearch
 } from './userAdapter';
 import { mapFirestoreError } from './firestoreErrors';
 
@@ -204,6 +205,17 @@ export const userService = {
   },
 
   /**
+   * Bounded directory search.
+   *
+   * Deliberately a separate call from `loadDirectory`: the full directory
+   * read stays exactly as it was, and a picker that needs a page of matches
+   * asks for a page of matches instead of re-pulling everybody.
+   */
+  async searchUsers(options: UserSearch): Promise<User[]> {
+    return viaAdapter(() => getUserAdapter().searchUsers(options));
+  },
+
+  /**
    * Publishes the identity acting on the directory (called by the auth
    * service on sign-in, restore and sign-out).
    */
@@ -341,9 +353,14 @@ export const userService = {
   unblockUser: transition('unblockUser'),
 
   /**
-   * Derived counters (reputation, question/answer totals). Still local-only:
-   * the content that produces them is migrated in a later milestone, so
-   * these deliberately never reach Firestore yet.
+   * In-memory preview of the derived counters.
+   *
+   * This store is never a source of truth: `reputation` is persisted only by
+   * `reputationCreditEdit()` in `firestore.rules` (same commit as the ledger
+   * row), and every count a profile shows is re-derived from
+   * `reputationEvents` / `follows` / `userBadges` by `profileService`. What
+   * this method buys is an immediately-correct-looking directory while the
+   * next read is still in flight.
    */
   adjustStats(
     userId: string,

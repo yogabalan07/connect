@@ -1,16 +1,19 @@
 import {
   collection,
   doc,
+  endAt,
   getDoc,
   getDocs,
+  limit as limitTo,
   orderBy,
   query,
   runTransaction,
   serverTimestamp,
+  startAt,
   updateDoc,
   where
 } from 'firebase/firestore';
-import type { DocumentData, DocumentSnapshot } from 'firebase/firestore';
+import type { DocumentData, DocumentSnapshot, Query } from 'firebase/firestore';
 import { getFirebaseDb } from '../lib/firebase';
 import { ServiceError } from '../lib/errors';
 import type { User, UserRole, UserStatus } from '../types';
@@ -20,7 +23,8 @@ import type {
   EditableProfilePatch,
   NewUserProfile,
   UserAdapter,
-  UserRecord
+  UserRecord,
+  UserSearch
 } from './userAdapter';
 
 /**
@@ -105,6 +109,9 @@ function toUserRecord(snapshot: DocumentSnapshot): UserRecord {
     photoURL: asString(data.photoURL),
     coverImage: asString(data.coverImage),
     skills: Array.isArray(data.skills) ? data.skills.filter((s): s is string => typeof s === 'string') : undefined,
+    github: asString(data.github),
+    linkedin: asString(data.linkedin),
+    website: asString(data.website),
     createdAt: toDate(data.createdAt),
     updatedAt: toDate(data.updatedAt)
   };
@@ -128,6 +135,9 @@ function toWriteData(record: UserRecord): DocumentData {
   if (record.photoURL !== undefined) data.photoURL = record.photoURL;
   if (record.coverImage !== undefined) data.coverImage = record.coverImage;
   if (record.skills !== undefined) data.skills = record.skills;
+  if (record.github !== undefined) data.github = record.github;
+  if (record.linkedin !== undefined) data.linkedin = record.linkedin;
+  if (record.website !== undefined) data.website = record.website;
   return data;
 }
 
@@ -149,6 +159,9 @@ function toRecordPatch(patch: EditableProfilePatch): Partial<UserRecord> {
   if (patch.avatar !== undefined) next.photoURL = patch.avatar;
   if (patch.coverImage !== undefined) next.coverImage = patch.coverImage;
   if (patch.skills !== undefined) next.skills = patch.skills;
+  if (patch.github !== undefined) next.github = patch.github;
+  if (patch.linkedin !== undefined) next.linkedin = patch.linkedin;
+  if (patch.website !== undefined) next.website = patch.website;
   return next;
 }
 
@@ -268,6 +281,61 @@ export const firebaseUserAdapter: UserAdapter = {
         }
       }
       return users;
+    } catch (error) {
+      throw mapFirestoreError(error);
+    }
+  },
+
+  /**
+   * Directory search that never becomes a full collection pull.
+   *
+   * Two prefix queries (display name and handle) narrow the candidates on the
+   * server using the automatic single-field indexes, and a bounded recent
+   * page is folded in so a case difference cannot hide somebody. Everything
+   * else - department, year, status and the case-insensitive substring match
+   * - is applied to that candidate set, which is then hard-capped.
+   */
+  async searchUsers(options: UserSearch): Promise<User[]> {
+    try {
+      const size = Math.max(1, Math.min(options.limit ?? 24, 100));
+      const base = collection(getFirebaseDb(), USERS);
+      const term = (options.term ?? '').trim();
+      const needle = term.toLowerCase();
+
+      const candidates = new Map<string, User>();
+      const collect = (snapshot: { docs: DocumentSnapshot[] }): void => {
+        for (const docSnapshot of snapshot.docs) {
+          try {
+            const user = toUser(toUserRecord(docSnapshot));
+            candidates.set(user.id, user);
+          } catch {
+            continue;
+          }
+        }
+      };
+
+      const recent = await getDocs(query(base, orderBy('createdAt', 'desc'), limitTo(size)));
+      collect(recent);
+
+      if (term) {
+        const prefix = (field: 'displayName' | 'username'): Query<DocumentData> =>
+          query(base, orderBy(field), startAt(term), endAt(`${term}`));
+        const [byName, byHandle] = await Promise.all([getDocs(prefix('displayName')), getDocs(prefix('username'))]);
+        collect(byName);
+        collect(byHandle);
+      }
+
+      return Array.from(candidates.values())
+        .filter(user => user.status === (options.status ?? 'approved'))
+        .filter(user => !options.department || user.department === options.department)
+        .filter(user => !options.year || user.year === options.year)
+        .filter(
+          user =>
+            !needle ||
+            user.name.toLowerCase().includes(needle) ||
+            user.username.toLowerCase().includes(needle)
+        )
+        .slice(0, size);
     } catch (error) {
       throw mapFirestoreError(error);
     }

@@ -34,6 +34,10 @@ export interface User {
   section?: string;
   bio: string;
   skills: string[];
+  /** Optional public links shown on the profile. Owner-editable only. */
+  github?: string;
+  linkedin?: string;
+  website?: string;
   role: UserRole;
   status: UserStatus;
   reputation: number;
@@ -101,6 +105,115 @@ export interface Answer {
   userVote?: 'up' | 'down' | null;
 }
 
+/**
+ * One line of a member's reputation ledger.
+ *
+ * `reputationEvents` is the ONLY source the app derives reputation from: the
+ * stored `delta` is validated by `firestore.rules` against the document the
+ * event claims to reward (the doubt, the answer, the accepted answer or the
+ * voter's own `votes/{…}` document), so a client can never mint points.
+ */
+export type ReputationEventType = 'question' | 'answer' | 'accepted' | 'vote';
+
+export interface ReputationEvent {
+  /**
+   * Deterministic id, so an event can only ever exist once:
+   * `question_{doubtId}_{uid}` · `answer_{doubtId}_{answerId}_{uid}` ·
+   * `accepted_{answerId}_{uid}` · `vote_{targetId}_{voterUid}`.
+   */
+  id: string;
+  /** The member the points belong to - never the writer of a vote event. */
+  userId: string;
+  type: ReputationEventType;
+  /** Signed point adjustment; the exact value is pinned by the rules. */
+  delta: number;
+  /** The document the reward is derived from (doubt id / answer id). */
+  sourceId: string;
+  /** Owning doubt for `answer` / `accepted` / `answer` votes; else `''`. */
+  doubtId: string;
+  /** For `vote` events: the member who cast the vote. */
+  voterId?: string;
+  /** For `vote` events: `1` (up) or `-1` (down). */
+  value?: number;
+  /** For `accepted` events: the doubt author who accepted the answer. */
+  actorId?: string;
+  /** For `vote` events: `''` on a milestone, `'doubt'` / `'answer'` otherwise. */
+  targetType?: string;
+  /** For `vote` events: the doubt or answer that was voted on. */
+  targetId?: string;
+  createdAtMs: number;
+}
+
+/** A follow edge: `follows/{targetUserId}_{followerUid}`. */
+export interface Follow {
+  id: string;
+  /** The member doing the following (the document owner). */
+  userId: string;
+  /** The member being followed. */
+  targetUserId: string;
+  createdAtMs: number;
+}
+
+/**
+ * Badge catalogue entry (`badges/{badgeId}`, admin-managed).
+ *
+ * `kind` decides who may award `userBadges/{uid}_{badgeId}`:
+ * `self` badges are claimed by the member and proved by the rules against a
+ * real document; `threshold` badges can only be granted by a moderator,
+ * because Firestore rules cannot count a collection.
+ */
+export interface BadgeDefinition {
+  id: string;
+  name: string;
+  description: string;
+  icon: string;
+  tier: 'bronze' | 'silver' | 'gold' | 'diamond';
+  kind: 'self' | 'threshold';
+  /** For `threshold` badges: the reputation needed to earn it. */
+  threshold?: number;
+}
+
+/** One badge actually held by a member (`userBadges/{uid}_{badgeId}`). */
+export interface UserBadge {
+  id: string;
+  uid: string;
+  badgeId: string;
+  /** The document that proves the criterion was met. */
+  sourceId: string;
+  doubtId?: string;
+  awardedAtMs: number;
+}
+
+/**
+ * Aggregated, fully derived profile numbers.
+ *
+ * Every field is computed from Firestore aggregations at read time and is
+ * NEVER written back to `users/{uid}` - `firestore.rules` refuses any client
+ * write to those keys, which is what stops a self-declared score.
+ */
+export interface ProfileStats {
+  userId: string;
+  reputation: number;
+  questionsCount: number;
+  answersCount: number;
+  acceptedCount: number;
+  followersCount: number;
+  followingCount: number;
+  badges: Badge[];
+  /** Wall-clock ms of the last computation (cache freshness). */
+  computedAtMs: number;
+}
+
+/** A row in a member's public activity timeline. */
+export interface ActivityItem {
+  id: string;
+  kind: 'question' | 'answer' | 'accepted' | 'follow' | 'badge' | 'reputation';
+  title: string;
+  detail: string;
+  link?: string;
+  createdAtMs: number;
+}
+
 export interface Doubt {
   id: string;
   title: string;
@@ -153,12 +266,33 @@ export interface Notification {
    * impersonates somebody else.
    */
   senderId: string;
-  type: 'mention' | 'answer' | 'accepted' | 'follow' | 'comment' | 'admin_approval' | 'announcement';
+  /**
+   * Event kinds. `badge` and `reputation` are the only two that may be
+   * addressed to the member who caused them (an award you give yourself a
+   * notification about); every other kind requires `userId != senderId`.
+   */
+  type:
+    | 'mention'
+    | 'answer'
+    | 'accepted'
+    | 'follow'
+    | 'comment'
+    | 'admin_approval'
+    | 'announcement'
+    | 'badge'
+    | 'reputation';
   title: string;
   message: string;
   timestamp: string;
   read: boolean;
   link?: string;
+  /**
+   * The document that justifies a `badge` or `reputation` event: the
+   * `userBadges/{uid}_{badgeId}` row, or the `reputationEvents/{id}` row.
+   * `firestore.rules` requires it and re-reads that document, so a member
+   * cannot congratulate themselves on an award they were never granted.
+   */
+  sourceId?: string;
   senderAvatar?: string;
   senderName?: string;
   /**

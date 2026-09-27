@@ -153,6 +153,8 @@ export function App() {
                 <Route path="community" element={<CommunityPage />} />
                 <Route path="reputation" element={<ReputationPage />} />
                 <Route path="users/:id" element={<UserProfilePage />} />
+                <Route path="users/:id/followers" element={<FollowersPage />} />
+                <Route path="users/:id/following" element={<FollowingPage />} />
                 <Route path="followers" element={<FollowersPage />} />
                 <Route path="following" element={<FollowingPage />} />
                 <Route path="notifications" element={<NotificationsPage />} />

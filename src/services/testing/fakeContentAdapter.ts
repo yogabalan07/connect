@@ -2,11 +2,15 @@ import { ServiceError } from '../../lib/errors';
 import { relativeTime } from '../../lib/time';
 import type {
   Answer,
+  BadgeDefinition,
   Category,
   Comment,
   Doubt,
+  Follow,
   Notification,
-  Tag
+  ReputationEvent,
+  Tag,
+  UserBadge
 } from '../../types';
 import type {
   AnswerContentPatch,
@@ -16,6 +20,10 @@ import type {
   ContentAdapter,
   DoubtContentPatch,
   DoubtStatePatch,
+  FollowQuery,
+  ReputationEventDraft,
+  ReputationQuery,
+  UserBadgeDraft,
   UserVotes,
   VoteWrite
 } from '../contentAdapter';
@@ -40,7 +48,14 @@ export interface FakeContentAdapter extends ContentAdapter {
   notificationsFor(userId: string): Notification[];
   bookmarkIds(actorId: string): string[];
   followIds(actorId: string): string[];
+  /** Follow edges pointing at `userId` (its followers). */
+  followerEdges(userId: string): Follow[];
+  /** Follow edges written by `userId`. */
+  followingEdges(userId: string): Follow[];
   tagFollowIds(actorId: string): string[];
+  reputationEvents(userId: string): ReputationEvent[];
+  userBadges(uid: string): UserBadge[];
+  badgeDefinitions(): BadgeDefinition[];
   /** Forces every call to fail with Firestore's `permission-denied` code. */
   setDenied(denied: boolean): void;
   reset(): void;
@@ -83,6 +98,19 @@ const METHODS = [
   'setFollowing',
   'listFollowingTagIds',
   'setTagFollowing',
+  'listFollowers',
+  'listFollowing',
+  'countFollowers',
+  'countFollowing',
+  'listReputationEvents',
+  'sumReputation',
+  'countAccepted',
+  'createReputationEvent',
+  'countDoubtsBy',
+  'countAnswersBy',
+  'listBadgeDefinitions',
+  'listUserBadges',
+  'createUserBadge',
   'listCategories',
   'createCategory',
   'deleteCategory',
@@ -108,11 +136,14 @@ export function createFakeContentAdapter(): FakeContentAdapter {
     comments: new Map<string, CommentRecord>(),
     votes: new Map<string, { targetType: 'doubt' | 'answer'; targetId: string; value: 1 | -1; userId: string }>(),
     bookmarks: new Map<string, { doubtId: string; userId: string }>(),
-    follows: new Map<string, { targetUserId: string; userId: string }>(),
+    follows: new Map<string, { targetUserId: string; userId: string; createdAtMs?: number }>(),
     tagFollows: new Map<string, { tagId: string; userId: string }>(),
     categories: new Map<string, Category>(),
     tags: new Map<string, Tag>(),
-    notifications: new Map<string, Notification>()
+    notifications: new Map<string, Notification>(),
+    reputationEvents: new Map<string, ReputationEvent>(),
+    badges: new Map<string, BadgeDefinition>(),
+    userBadges: new Map<string, UserBadge>()
   };
 
   const calls: Record<string, number> = {};
@@ -139,6 +170,39 @@ export function createFakeContentAdapter(): FakeContentAdapter {
   const applyVoteDelta = (current: number, before: number, after: number): number =>
     Math.max(0, current - (before === 1 ? 1 : 0) + (after === 1 ? 1 : 0));
 
+  const votePoints = (targetType: VoteWrite['targetType'], value: number): number => {
+    if (value === 0) return 0;
+    if (targetType === 'doubt') return value === 1 ? 5 : -2;
+    return value === 1 ? 10 : -2;
+  };
+
+  /**
+   * Mirrors the ledger half of `saveVote`: the voter's own row is written
+   * alongside the counters, and a self-vote - which can never become an
+   * event - is skipped exactly as `firestore.rules` would refuse it.
+   */
+  const bookVoteEvent = (
+    actorId: string,
+    write: VoteWrite,
+    authorId: string
+  ): void => {
+    if (!authorId || authorId === actorId) return;
+    store.reputationEvents.set(`vote_${write.targetId}_${actorId}`, {
+      id: `vote_${write.targetId}_${actorId}`,
+      userId: authorId,
+      voterId: actorId,
+      type: 'vote',
+      delta: votePoints(write.targetType, write.value),
+      sourceId: write.targetId,
+      doubtId: write.doubtId ?? '',
+      actorId: '',
+      targetType: write.targetType,
+      targetId: write.targetId,
+      value: write.value,
+      createdAtMs: Date.now()
+    });
+  };
+
   const adapter: FakeContentAdapter = {
     calls,
 
@@ -163,6 +227,28 @@ export function createFakeContentAdapter(): FakeContentAdapter {
       Array.from(store.tagFollows.values())
         .filter(item => item.userId === actorId)
         .map(item => item.tagId),
+    followerEdges: userId =>
+      Array.from(store.follows.entries())
+        .filter(([, item]) => item.targetUserId === userId)
+        .map(([id, item]) => ({
+          id,
+          userId: item.userId,
+          targetUserId: item.targetUserId,
+          createdAtMs: item.createdAtMs ?? 0
+        })),
+    followingEdges: userId =>
+      Array.from(store.follows.entries())
+        .filter(([, item]) => item.userId === userId)
+        .map(([id, item]) => ({
+          id,
+          userId: item.userId,
+          targetUserId: item.targetUserId,
+          createdAtMs: item.createdAtMs ?? 0
+        })),
+    reputationEvents: userId =>
+      Array.from(store.reputationEvents.values()).filter(item => item.userId === userId),
+    userBadges: uid => Array.from(store.userBadges.values()).filter(item => item.uid === uid),
+    badgeDefinitions: () => Array.from(store.badges.values()),
 
     setDenied(denied: boolean): void {
       denyAll = denied;
@@ -181,6 +267,9 @@ export function createFakeContentAdapter(): FakeContentAdapter {
       store.categories.clear();
       store.tags.clear();
       store.notifications.clear();
+      store.reputationEvents.clear();
+      store.badges.clear();
+      store.userBadges.clear();
     },
 
     // -------------------------------------------------------------- Doubts
@@ -371,6 +460,7 @@ export function createFakeContentAdapter(): FakeContentAdapter {
           upvotes: applyVoteDelta(doubt.upvotes, upBefore, upAfter),
           downvotes: applyVoteDelta(doubt.downvotes, downBefore, downAfter)
         });
+        bookVoteEvent(actorId, write, doubt.authorId);
       } else {
         const answer = store.answers.get(write.targetId);
         if (!answer) throw notFound();
@@ -379,6 +469,7 @@ export function createFakeContentAdapter(): FakeContentAdapter {
           upvotes: applyVoteDelta(answer.upvotes, upBefore, upAfter),
           downvotes: applyVoteDelta(answer.downvotes, downBefore, downAfter)
         });
+        bookVoteEvent(actorId, write, answer.authorId);
       }
     },
 
@@ -403,7 +494,7 @@ export function createFakeContentAdapter(): FakeContentAdapter {
     async setFollowing(actorId: string, userId: string, following: boolean): Promise<void> {
       count('setFollowing');
       const key = `${userId}_${actorId}`;
-      if (following) store.follows.set(key, { targetUserId: userId, userId: actorId });
+      if (following) store.follows.set(key, { targetUserId: userId, userId: actorId, createdAtMs: Date.now() });
       else store.follows.delete(key);
     },
 
@@ -424,6 +515,147 @@ export function createFakeContentAdapter(): FakeContentAdapter {
           followersCount: Math.max(0, tag.followersCount + (following ? 1 : -1))
         });
       }
+    },
+
+    // --------------------------------------------------------- Social graph
+    async listFollowers(userId: string, options?: FollowQuery): Promise<Follow[]> {
+      count('listFollowers');
+      const edges = adapter.followerEdges(userId).sort((a, b) => b.createdAtMs - a.createdAtMs);
+      return options?.limit ? edges.slice(0, options.limit) : edges;
+    },
+
+    async listFollowing(userId: string, options?: FollowQuery): Promise<Follow[]> {
+      count('listFollowing');
+      const edges = adapter.followingEdges(userId).sort((a, b) => b.createdAtMs - a.createdAtMs);
+      return options?.limit ? edges.slice(0, options.limit) : edges;
+    },
+
+    async countFollowers(userId: string): Promise<number> {
+      count('countFollowers');
+      return adapter.followerEdges(userId).length;
+    },
+
+    async countFollowing(userId: string): Promise<number> {
+      count('countFollowing');
+      return adapter.followIds(userId).length;
+    },
+
+    // ----------------------------------------------------- Reputation ledger
+    async listReputationEvents(userId: string, options?: ReputationQuery): Promise<ReputationEvent[]> {
+      count('listReputationEvents');
+      const events = adapter
+        .reputationEvents(userId)
+        .filter(event => options?.includeVotes || event.type !== 'vote')
+        .slice()
+        .sort((a, b) => b.createdAtMs - a.createdAtMs);
+      return options?.limit ? events.slice(0, options.limit) : events;
+    },
+
+    async sumReputation(userId: string): Promise<number> {
+      count('sumReputation');
+      return adapter.reputationEvents(userId).reduce((total, event) => total + event.delta, 0);
+    },
+
+    async countAccepted(userId: string): Promise<number> {
+      count('countAccepted');
+      return adapter.reputationEvents(userId).filter(event => event.type === 'accepted').length;
+    },
+
+    async createReputationEvent(actorId: string, draft: ReputationEventDraft): Promise<ReputationEvent> {
+      count('createReputationEvent');
+      const now = Date.now();
+      const tail = {
+        actorId: '',
+        voterId: '',
+        targetType: '',
+        targetId: '',
+        value: 0,
+        createdAtMs: now
+      };
+      let created: ReputationEvent;
+      if (draft.type === 'question') {
+        created = {
+          ...tail,
+          id: `question_${draft.doubtId}_${draft.userId}`,
+          userId: draft.userId,
+          actorId,
+          type: 'question',
+          delta: 5,
+          sourceId: draft.doubtId,
+          doubtId: draft.doubtId
+        };
+      } else if (draft.type === 'answer') {
+        created = {
+          ...tail,
+          id: `answer_${draft.doubtId}_${draft.answerId}_${draft.userId}`,
+          userId: draft.userId,
+          actorId,
+          type: 'answer',
+          delta: 10,
+          sourceId: draft.answerId,
+          doubtId: draft.doubtId
+        };
+      } else {
+        created = {
+          ...tail,
+          id: `accepted_${draft.answerId}_${draft.userId}`,
+          userId: draft.userId,
+          actorId,
+          type: 'accepted',
+          delta: 15,
+          sourceId: draft.answerId,
+          doubtId: draft.doubtId
+        };
+      }
+      // Deterministic id: a second claim of the same milestone is refused,
+      // exactly as the rules refuse to mint an event that already exists.
+      if (store.reputationEvents.has(created.id)) {
+        throw new ServiceError('content/exists', 'That milestone is already booked.');
+      }
+      store.reputationEvents.set(created.id, created);
+      return { ...created };
+    },
+
+    // -------------------------------------------------------------- Statistics
+    /**
+     * Same source as the Firebase adapter: the ledger, not the content
+     * collections, so a count a member can see is a count anybody can see.
+     */
+    async countDoubtsBy(authorId: string): Promise<number> {
+      count('countDoubtsBy');
+      return adapter.reputationEvents(authorId).filter(event => event.type === 'question').length;
+    },
+
+    async countAnswersBy(authorId: string): Promise<number> {
+      count('countAnswersBy');
+      return adapter.reputationEvents(authorId).filter(event => event.type === 'answer').length;
+    },
+
+    // ------------------------------------------------------------------ Badges
+    async listBadgeDefinitions(): Promise<BadgeDefinition[]> {
+      count('listBadgeDefinitions');
+      return adapter.badgeDefinitions().map(item => ({ ...item }));
+    },
+
+    async listUserBadges(uid: string): Promise<UserBadge[]> {
+      count('listUserBadges');
+      return adapter.userBadges(uid).map(item => ({ ...item }));
+    },
+
+    async createUserBadge(draft: UserBadgeDraft): Promise<UserBadge> {
+      count('createUserBadge');
+      const id = `${draft.uid}_${draft.badgeId}`;
+      if (store.userBadges.has(id)) throw new ServiceError('content/exists', 'Already earned.');
+      const created: UserBadge = {
+        id,
+        uid: draft.uid,
+        badgeId: draft.badgeId,
+        sourceId: draft.sourceId,
+        doubtId: draft.doubtId,
+        awardedAtMs: Date.now()
+      };
+      store.userBadges.set(id, created);
+      return { ...created };
     },
 
     // ------------------------------------------------------------- Catalog

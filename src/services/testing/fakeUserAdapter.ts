@@ -4,7 +4,8 @@ import { DEFAULT_AVATAR, DEFAULT_BIO, defaultUsername } from '../userRecord';
 import type {
   EditableProfilePatch,
   NewUserProfile,
-  UserAdapter
+  UserAdapter,
+  UserSearch
 } from '../userAdapter';
 
 /**
@@ -35,6 +36,7 @@ const METHODS: (keyof UserAdapter)[] = [
   'updateUserProfile',
   'listUsers',
   'listPendingUsers',
+  'searchUsers',
   'setUserStatus',
   'approveUser',
   'rejectUser',
@@ -136,6 +138,24 @@ export function createFakeUserAdapter(): FakeUserAdapter {
     async setUserStatus(uid: string, status: UserStatus): Promise<User> {
       count('setUserStatus');
       return bump(uid, { status });
+    },
+
+    async searchUsers(options: UserSearch): Promise<User[]> {
+      count('searchUsers');
+      const size = Math.max(1, Math.min(options.limit ?? 24, 100));
+      const needle = (options.term ?? '').trim().toLowerCase();
+      return adapter
+        .records()
+        .filter(user => user.status === (options.status ?? 'approved'))
+        .filter(user => !options.department || user.department === options.department)
+        .filter(user => !options.year || user.year === options.year)
+        .filter(
+          user =>
+            !needle ||
+            user.name.toLowerCase().includes(needle) ||
+            user.username.toLowerCase().includes(needle)
+        )
+        .slice(0, size);
     },
 
     async approveUser(uid: string): Promise<User> {

@@ -2,16 +2,27 @@ import {
   collection,
   deleteDoc,
   doc,
+  getAggregateFromServer,
+  getCountFromServer,
   getDoc,
   getDocs,
+  limit as limitTo,
+  orderBy,
   query,
   runTransaction,
   setDoc,
+  sum,
   updateDoc,
   where,
   writeBatch
 } from 'firebase/firestore';
-import type { DocumentData, DocumentReference, QueryDocumentSnapshot } from 'firebase/firestore';
+import type {
+  DocumentData,
+  DocumentReference,
+  Query,
+  QueryConstraint,
+  QueryDocumentSnapshot
+} from 'firebase/firestore';
 import { getFirebaseDb } from '../lib/firebase';
 import { ServiceError } from '../lib/errors';
 import { relativeTime } from '../lib/time';
@@ -19,13 +30,17 @@ import type {
   AcademicYear,
   Answer,
   Attachment,
+  BadgeDefinition,
   Category,
   CodeSnippet,
   Comment,
   Department,
   Doubt,
+  Follow,
   Notification,
+  ReputationEvent,
   Tag,
+  UserBadge,
   UserRole,
   UserSnapshot
 } from '../types';
@@ -37,6 +52,10 @@ import type {
   ContentAdapter,
   DoubtContentPatch,
   DoubtStatePatch,
+  FollowQuery,
+  ReputationEventDraft,
+  ReputationQuery,
+  UserBadgeDraft,
   UserVotes,
   VoteValue,
   VoteWrite
@@ -82,6 +101,17 @@ const TAG_FOLLOWS = 'tagFollows';
 const CATEGORIES = 'categories';
 const TAGS = 'tags';
 const NOTIFICATIONS = 'notifications';
+const REPUTATION_EVENTS = 'reputationEvents';
+const BADGES = 'badges';
+const USER_BADGES = 'userBadges';
+const USERS = 'users';
+
+/**
+ * Ledger rows any approved member may count off a profile: they restate a
+ * public fact (somebody asked, answered or was accepted) and carry no voter.
+ * `vote` rows are deliberately absent - they name the member who voted.
+ */
+const NON_VOTE_TYPES = ['question', 'answer', 'accepted'];
 
 /** `writeBatch` hard limit is 500; leave headroom for the parent update. */
 const MAX_BATCH_DELETES = 400;
@@ -276,10 +306,175 @@ function toNotification(data: DocumentData, id: string): Notification {
     timestamp: relativeTime(num(data.createdAtMs)),
     read: bool(data.read),
     link: optStr(data.link),
+    sourceId: optStr(data.sourceId),
     senderName: optStr(data.senderName),
     senderAvatar: optStr(data.senderAvatar),
     source: data.source === 'server' ? 'server' : 'client'
   };
+}
+
+// ------------------------------------------------------- reputation ledger
+
+function toFollow(data: DocumentData, id: string): Follow {
+  return {
+    id,
+    userId: str(data.userId),
+    targetUserId: str(data.targetUserId),
+    createdAtMs: num(data.createdAtMs)
+  };
+}
+
+function toReputationEvent(data: DocumentData, id: string): ReputationEvent {
+  return {
+    id,
+    userId: str(data.userId),
+    type: (data.type as ReputationEvent['type']) ?? 'question',
+    delta: num(data.delta),
+    sourceId: str(data.sourceId),
+    doubtId: str(data.doubtId),
+    voterId: optStr(data.voterId),
+    value: typeof data.value === 'number' ? data.value : undefined,
+    actorId: optStr(data.actorId),
+    createdAtMs: num(data.createdAtMs)
+  };
+}
+
+/**
+ * Fields a ledger row always carries, even when they are meaningless for its
+ * type. `firestore.rules` declares the whole shape up front, so an absent key
+ * would be refused rather than silently defaulted - the adapter writes them
+ * explicitly instead.
+ */
+function eventTail(): DocumentData {
+  return { actorId: '', voterId: '', targetType: '', targetId: '', value: 0 };
+}
+
+/**
+ * Document id + payload for a milestone. The id is derived from the work
+ * itself, which is what makes a second claim of the same milestone an
+ * `already-exists` failure instead of a second helping of points.
+ */
+function serializeEvent(actorId: string, draft: ReputationEventDraft): { id: string; data: DocumentData } {
+  const base: DocumentData = { ...eventTail(), createdAtMs: Date.now() };
+  if (draft.type === 'question') {
+    const id = `question_${draft.doubtId}_${draft.userId}`;
+    return {
+      id,
+      data: {
+        ...base,
+        id,
+        userId: draft.userId,
+        actorId,
+        type: 'question',
+        delta: 5,
+        sourceId: draft.doubtId,
+        doubtId: draft.doubtId
+      }
+    };
+  }
+  if (draft.type === 'answer') {
+    const id = `answer_${draft.doubtId}_${draft.answerId}_${draft.userId}`;
+    return {
+      id,
+      data: {
+        ...base,
+        id,
+        userId: draft.userId,
+        actorId,
+        type: 'answer',
+        delta: 10,
+        sourceId: draft.answerId,
+        doubtId: draft.doubtId
+      }
+    };
+  }
+  const id = `accepted_${draft.answerId}_${draft.userId}`;
+  return {
+    id,
+    data: {
+      ...base,
+      id,
+      userId: draft.userId,
+      actorId,
+      type: 'accepted',
+      delta: 15,
+      sourceId: draft.answerId,
+      doubtId: draft.doubtId
+    }
+  };
+}
+
+/** Point value the published policy assigns to one vote (see ReputationPage). */
+function voteReward(targetType: VoteWrite['targetType'], value: number): number {
+  if (value === 0) return 0;
+  if (targetType === 'doubt') return value === 1 ? 5 : -2;
+  return value === 1 ? 10 : -2;
+}
+
+function serializeVoteEvent(actorId: string, write: VoteWrite, authorId: string): { id: string; data: DocumentData } {
+  const id = `vote_${write.targetId}_${actorId}`;
+  const withdrawn = write.value === 0;
+  return {
+    id,
+    data: {
+      ...eventTail(),
+      id,
+      // A withdrawn vote leaves no beneficiary, which is exactly what a
+      // zero-delta row should say.
+      userId: withdrawn ? '' : authorId,
+      voterId: actorId,
+      type: 'vote',
+      delta: voteReward(write.targetType, write.value),
+      sourceId: write.targetId,
+      doubtId: write.doubtId ?? '',
+      targetType: write.targetType,
+      targetId: write.targetId,
+      value: write.value,
+      createdAtMs: Date.now()
+    }
+  };
+}
+
+function toBadgeDefinition(data: DocumentData, id: string): BadgeDefinition {
+  return {
+    id,
+    name: str(data.name),
+    description: str(data.description),
+    icon: str(data.icon),
+    tier: (data.tier as BadgeDefinition['tier']) ?? 'bronze',
+    kind: data.kind === 'threshold' ? 'threshold' : 'self',
+    threshold: typeof data.threshold === 'number' ? data.threshold : undefined
+  };
+}
+
+function toUserBadge(data: DocumentData, id: string): UserBadge {
+  return {
+    id,
+    uid: str(data.uid),
+    badgeId: str(data.badgeId),
+    sourceId: str(data.sourceId),
+    doubtId: optStr(data.doubtId),
+    awardedAtMs: num(data.awardedAtMs)
+  };
+}
+
+/** `getCountFromServer` / `getAggregateFromServer` are reads with rules on. */
+async function countOf(target: Query<DocumentData>): Promise<number> {
+  const snapshot = await getCountFromServer(target);
+  return snapshot.data().count;
+}
+
+async function sumOf(target: Query<DocumentData>, field: string): Promise<number> {
+  const snapshot = await getAggregateFromServer(target, { total: sum(field) });
+  return snapshot.data().total;
+}
+
+function bounded(query: Query<DocumentData>, options?: FollowQuery): Query<DocumentData> {
+  return options?.limit ? queryLimit(query, options.limit) : query;
+}
+
+function queryLimit(target: Query<DocumentData>, size: number): Query<DocumentData> {
+  return query(target, limitTo(Math.max(1, Math.min(size, 200))));
 }
 
 function serializeDoubt(doubt: Doubt): DocumentData {
@@ -585,6 +780,11 @@ export const firebaseContentAdapter: ContentAdapter = {
 
       const current = voteSnapshot.exists() ? normalizeVote(voteSnapshot.data().value) : 0;
       const parentData = parentSnapshot.data();
+      const authorId = str(parentData.authorId);
+      // Reads must all precede writes, so the beneficiary's record is opened
+      // up front - and only when this vote can actually credit somebody.
+      const credits = authorId && authorId !== actorId ? authorId : '';
+      const userSnapshot = credits ? await transaction.get(doc(db(), USERS, credits)) : null;
       let upvotes = num(parentData.upvotes);
       let downvotes = num(parentData.downvotes);
 
@@ -611,6 +811,23 @@ export const firebaseContentAdapter: ContentAdapter = {
       }
 
       transaction.update(parentRef, { upvotes, downvotes });
+
+      // The ledger row and the beneficiary's public score move WITH the vote.
+      // `firestore.rules` reads this same `votes/…` document before and after
+      // the commit, so the credit is the difference between the two states -
+      // not a number the browser got to pick - and a self-vote (which can
+      // never be an event) is skipped entirely.
+      if (credits && userSnapshot?.exists()) {
+        const event = serializeVoteEvent(actorId, write, credits);
+        const before = num(userSnapshot.data().reputation);
+        const credit =
+          voteReward(write.targetType, write.value) - voteReward(write.targetType, current);
+        transaction.set(doc(db(), REPUTATION_EVENTS, event.id), event.data);
+        transaction.update(doc(db(), USERS, credits), {
+          reputation: Math.max(0, before + credit),
+          reputationEventRef: event.id
+        });
+      }
     });
   },
 
@@ -672,6 +889,161 @@ export const firebaseContentAdapter: ContentAdapter = {
         if (next !== current) transaction.update(tagRef, { followersCount: next });
       }
     });
+  },
+
+  // --------------------------------------------------------- Social graph
+  async listFollowers(userId: string, options?: FollowQuery): Promise<Follow[]> {
+    const ordered = query(
+      collection(db(), FOLLOWS),
+      where('targetUserId', '==', userId),
+      orderBy('createdAtMs', 'desc')
+    );
+    const snapshot = await getDocs(bounded(ordered, options));
+    return snapshot.docs.map(item => toFollow(readSnapshot(item), item.id));
+  },
+
+  async listFollowing(userId: string, options?: FollowQuery): Promise<Follow[]> {
+    const ordered = query(
+      collection(db(), FOLLOWS),
+      where('userId', '==', userId),
+      orderBy('createdAtMs', 'desc')
+    );
+    const snapshot = await getDocs(bounded(ordered, options));
+    return snapshot.docs.map(item => toFollow(readSnapshot(item), item.id));
+  },
+
+  async countFollowers(userId: string): Promise<number> {
+    return countOf(query(collection(db(), FOLLOWS), where('targetUserId', '==', userId)));
+  },
+
+  async countFollowing(userId: string): Promise<number> {
+    return countOf(query(collection(db(), FOLLOWS), where('userId', '==', userId)));
+  },
+
+  // ----------------------------------------------------- Reputation ledger
+  async listReputationEvents(userId: string, options?: ReputationQuery): Promise<ReputationEvent[]> {
+    const constraints: QueryConstraint[] = [where('userId', '==', userId)];
+    // A `vote` row names its voter, which is what the `votes` collection
+    // keeps private - so only the beneficiary's own history may include them.
+    if (!options?.includeVotes) constraints.push(where('type', 'in', NON_VOTE_TYPES));
+    const ordered = query(
+      collection(db(), REPUTATION_EVENTS),
+      ...constraints,
+      orderBy('createdAtMs', 'desc')
+    );
+    const snapshot = await getDocs(bounded(ordered, options));
+    return snapshot.docs.map(item => toReputationEvent(readSnapshot(item), item.id));
+  },
+
+  async sumReputation(userId: string): Promise<number> {
+    return sumOf(query(collection(db(), REPUTATION_EVENTS), where('userId', '==', userId)), 'delta');
+  },
+
+  async countAccepted(userId: string): Promise<number> {
+    return countOf(
+      query(
+        collection(db(), REPUTATION_EVENTS),
+        where('userId', '==', userId),
+        where('type', '==', 'accepted')
+      )
+    );
+  },
+
+  /**
+   * Books a milestone and the score it earns in ONE transaction.
+   *
+   * The event id is derived from the work itself and `firestore.rules`
+   * requires the event to be minted inside the very commit that moves
+   * `users.reputation`, so the credit can be applied exactly once - a retry,
+   * a second claim or a hand-edited delta all fail the transaction instead of
+   * quietly inflating a score.
+   */
+  async createReputationEvent(actorId: string, draft: ReputationEventDraft): Promise<ReputationEvent> {
+    const { id, data } = serializeEvent(actorId, draft);
+    const beneficiary = str(data.userId);
+    const eventRef = doc(db(), REPUTATION_EVENTS, id);
+    const userRef = doc(db(), USERS, beneficiary);
+
+    await runTransaction(db(), async transaction => {
+      const [eventSnapshot, userSnapshot] = await Promise.all([
+        transaction.get(eventRef),
+        transaction.get(userRef)
+      ]);
+      // The id is a pure function of the work, so "already exists" means the
+      // milestone was booked before - a second credit is refused, not summed.
+      if (eventSnapshot.exists()) {
+        throw new ServiceError('content/exists', 'That milestone is already booked.');
+      }
+      if (!userSnapshot.exists()) throw notFound();
+      const before = num(userSnapshot.data().reputation);
+      transaction.set(eventRef, data);
+      transaction.update(userRef, {
+        reputation: Math.max(0, before + num(data.delta)),
+        reputationEventRef: id
+      });
+    });
+
+    return toReputationEvent(data, id);
+  },
+
+  // -------------------------------------------------------------- Statistics
+  /**
+   * Profile counters come off the ledger rather than the content collections:
+   * `reputationEvents` is readable by any approved member for the non-vote
+   * rows (they restate a public fact), so a profile somebody else is looking
+   * at proves exactly the same query the owner's own profile does - while a
+   * `doubts` / collection-group `answers` count could never be proven for a
+   * private thread. Like the score itself, these do not shrink when content
+   * is deleted: the work was real when it was booked.
+   */
+  async countDoubtsBy(authorId: string): Promise<number> {
+    return countOf(
+      query(
+        collection(db(), REPUTATION_EVENTS),
+        where('userId', '==', authorId),
+        where('type', '==', 'question')
+      )
+    );
+  },
+
+  async countAnswersBy(authorId: string): Promise<number> {
+    return countOf(
+      query(
+        collection(db(), REPUTATION_EVENTS),
+        where('userId', '==', authorId),
+        where('type', '==', 'answer')
+      )
+    );
+  },
+
+  // ------------------------------------------------------------------ Badges
+  async listBadgeDefinitions(): Promise<BadgeDefinition[]> {
+    const snapshot = await getDocs(collection(db(), BADGES));
+    return snapshot.docs.map(item => toBadgeDefinition(readSnapshot(item), item.id));
+  },
+
+  async listUserBadges(uid: string): Promise<UserBadge[]> {
+    const ordered = query(
+      collection(db(), USER_BADGES),
+      where('uid', '==', uid),
+      orderBy('awardedAtMs', 'desc')
+    );
+    const snapshot = await getDocs(ordered);
+    return snapshot.docs.map(item => toUserBadge(readSnapshot(item), item.id));
+  },
+
+  async createUserBadge(draft: UserBadgeDraft): Promise<UserBadge> {
+    const id = `${draft.uid}_${draft.badgeId}`;
+    const data: DocumentData = {
+      id,
+      uid: draft.uid,
+      badgeId: draft.badgeId,
+      sourceId: draft.sourceId,
+      doubtId: draft.doubtId ?? '',
+      awardedAtMs: Date.now()
+    };
+    await setDoc(doc(db(), USER_BADGES, id), data);
+    return toUserBadge(data, id);
   },
 
   // --------------------------------------------------------------- Catalog
@@ -755,6 +1127,7 @@ export const firebaseContentAdapter: ContentAdapter = {
       message: notification.message,
       read: notification.read,
       link: notification.link,
+      sourceId: notification.sourceId,
       senderName: notification.senderName,
       senderAvatar: notification.senderAvatar,
       createdAtMs: Date.now()
