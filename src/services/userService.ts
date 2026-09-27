@@ -9,6 +9,38 @@ interface UserDirectory {
   error?: string;
 }
 
+/**
+ * Profile fields a signed-in user may edit on their own record.
+ *
+ * Identity (`id`, `email`), authorization (`role`, `status`), ownership and
+ * the derived counters are deliberately excluded: a client profile update can
+ * never grant privileges, change moderation state or rewrite who owns a row.
+ */
+const EDITABLE_PROFILE_KEYS = [
+  'name',
+  'username',
+  'avatar',
+  'coverImage',
+  'department',
+  'year',
+  'section',
+  'bio',
+  'skills'
+] as const;
+
+export type EditableProfileKey = (typeof EDITABLE_PROFILE_KEYS)[number];
+
+/** Narrow patch accepted by `userService.updateProfile`. */
+export type EditableProfilePatch = Partial<Pick<User, EditableProfileKey>>;
+
+function assertEditableProfilePatch(patch: EditableProfilePatch): void {
+  for (const key of Object.keys(patch)) {
+    if (!EDITABLE_PROFILE_KEYS.some(allowed => allowed === key)) {
+      throw new ServiceError('user/immutable-field', 'That profile field cannot be changed.');
+    }
+  }
+}
+
 const store = createStore<UserDirectory>({ users: mockUsers, status: 'loading' });
 
 function requireUser(userId: string): User {
@@ -134,8 +166,18 @@ export const userService = {
     }
   },
 
-  updateProfile(userId: string, patch: Partial<User>): User {
-    const updated = { ...requireUser(userId), ...patch, id: userId };
+  /**
+   * Applies a profile edit to the user's own record.
+   *
+   * Accepts only `EditableProfilePatch` — enforced again at runtime so a
+   * JavaScript caller passing `id`, `email`, `role` or `status` is rejected
+   * instead of silently mutating identity or authorization fields.
+   */
+  updateProfile(userId: string, patch: EditableProfilePatch): User {
+    requireUser(userId);
+    assertEditableProfilePatch(patch);
+
+    const updated: User = { ...requireUser(userId), ...patch, id: userId };
     store.set(prev => ({
       ...prev,
       users: prev.users.map(u => (u.id === userId ? updated : u))

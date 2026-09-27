@@ -27,7 +27,7 @@ import {
   notificationService,
   socialService
 } from '../services';
-import { userService } from '../services/userService';
+import { userService, type EditableProfilePatch } from '../services/userService';
 import { reportService } from '../services/reportService';
 import { useAuth } from '../hooks/useAuth';
 import { useUsers } from '../hooks/useUsers';
@@ -96,7 +96,7 @@ interface AppContextType {
   sendMessage: (receiverId: string, text: string, codeSnippet?: Message['codeSnippet']) => void;
 
   // Profile
-  updateUserProfile: (data: Partial<User>) => void;
+  updateUserProfile: (data: EditableProfilePatch) => void;
 
   // Admin & moderation
   approveUser: (userId: string) => void;
@@ -416,7 +416,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // --------------------------------------------------------------- Profile
   const updateUserProfile = useCallback(
-    (data: Partial<User>) => {
+    (data: EditableProfilePatch) => {
       run(user => {
         userService.updateProfile(user.id, data);
         toastStore.add('Profile updated successfully!', 'success');

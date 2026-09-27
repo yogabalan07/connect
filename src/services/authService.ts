@@ -225,7 +225,6 @@ export const authService = {
         profile = userService.getById(authUser.uid)
           ? userService.updateProfile(authUser.uid, {
               name,
-              email,
               department: input.department,
               year: input.year,
               skills: input.skills,
@@ -272,22 +271,32 @@ export const authService = {
     void boundAdapter?.signOut().catch(() => undefined);
   },
 
+  /**
+   * Sends a password reset link.
+   *
+   * The reply is byte-identical whether or not the address has an account:
+   * `auth/user-not-found` is swallowed and answered with the same generic
+   * confirmation, so the form can never be used to enumerate registered
+   * college emails.
+   */
   async requestPasswordReset(email: string): Promise<ServiceResult<string>> {
     const normalized = normalizeEmail(email);
     if (!normalized || !EMAIL_PATTERN.test(normalized)) {
       return fail('Enter a valid college email address.');
     }
 
+    const confirmation =
+      `If an account exists for ${normalized}, password reset instructions ` +
+      'have been sent. Check your inbox and spam folder.';
+
     ensureListening();
     try {
       await currentAdapter().sendPasswordReset(normalized);
-      return ok(
-        `If an account exists for ${normalized}, password reset instructions have been sent. Check your inbox and spam folder.`
-      );
+      return ok(confirmation);
     } catch (error) {
       const mapped = mapAuthError(error);
       if (mapped.code === 'auth/user-not-found') {
-        return fail('No account exists for that college email address.');
+        return ok(confirmation);
       }
       return fail(mapped.message);
     }

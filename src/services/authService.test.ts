@@ -320,11 +320,16 @@ describe('authService.requestPasswordReset', () => {
     expect(fake.resetEmails).toContain(input.email);
   });
 
-  it('reports unknown accounts without sending anything', async () => {
-    const result = await authService.requestPasswordReset(randomEmail());
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.message).toBe('No account exists for that college email address.');
+  it('answers an unknown account exactly like a known one', async () => {
+    const email = randomEmail();
+    const result = await authService.requestPasswordReset(email);
+
+    // Anti-enumeration: the caller cannot tell the two outcomes apart.
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data).toContain('password reset instructions have been sent');
+    expect(result.data).toContain(email);
+    expect(result.data).not.toContain('No account exists');
     expect(fake.resetEmails).toHaveLength(0);
   });
 });
