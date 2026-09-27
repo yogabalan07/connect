@@ -106,8 +106,21 @@ export function getFirebaseAuth(): Auth {
   return getAuth(getFirebaseApp());
 }
 
+/**
+ * Firestore database id used by the whole client.
+ *
+ * This project's database is named `default`. The SDK's *implicit* resolution
+ * does not resolve to it, so `getFirestore(app)` fails every read/write with
+ * `NOT_FOUND`; the database id is therefore always passed explicitly.
+ *
+ * Hard-coded on purpose: Vite only exposes `VITE_`-prefixed variables to the
+ * browser, and the unprefixed `FIRESTORE_DATABASE_ID` is reserved for the
+ * privileged `scripts/` bootstrap, which must never be reachable from here.
+ */
+export const FIRESTORE_DATABASE_ID = 'default';
+
 export function getFirebaseDb(): Firestore {
-  return getFirestore(getFirebaseApp());
+  return getFirestore(getFirebaseApp(), FIRESTORE_DATABASE_ID);
 }
 
 export function getFirebaseStorage(): FirebaseStorage {

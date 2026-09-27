@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getApps } from 'firebase/app';
 import { ServiceError } from './errors';
 import {
+  FIRESTORE_DATABASE_ID,
   getFirebaseApp,
   getFirebaseAuth,
   getFirebaseDb,
@@ -196,5 +197,44 @@ describe('singleton initialization', () => {
     expect(auth.app).toBe(getFirebaseApp());
     expect(db.app).toBe(getFirebaseApp());
     expect(storage.app).toBe(getFirebaseApp());
+  });
+});
+
+/**
+ * This project's Firestore database is named `default`. Passing the database
+ * id explicitly is load-bearing: the SDK's implicit resolution targets a
+ * database this project does not have, which surfaces as `NOT_FOUND` on every
+ * read and write. These tests fail if `getFirebaseDb()` ever goes implicit
+ * again, because the resolved database id flips to `(default)`.
+ */
+describe('firestore database targeting', () => {
+  type DatabaseIdInternals = { _databaseId?: { projectId: string; database: string } };
+
+  /** Reads the database id the SDK actually resolved for this handle. */
+  function resolvedDatabase(db: ReturnType<typeof getFirebaseDb>): string | undefined {
+    return (db as unknown as DatabaseIdInternals)._databaseId?.database;
+  }
+
+  it('pins the database id to "default"', () => {
+    expect(FIRESTORE_DATABASE_ID).toBe('default');
+  });
+
+  it('resolves getFirebaseDb() against `default`, never the implicit database', () => {
+    clearFirebaseEnv();
+    stubFullConfig();
+
+    const db = getFirebaseDb();
+
+    expect(resolvedDatabase(db)).toBe('default');
+    expect(resolvedDatabase(db)).not.toBe('(default)');
+    expect(db.app).toBe(getFirebaseApp());
+    expect(getApps()).toHaveLength(1);
+  });
+
+  it('keeps returning one handle for that database id', () => {
+    clearFirebaseEnv();
+    stubFullConfig();
+
+    expect(getFirebaseDb()).toBe(getFirebaseDb());
   });
 });
