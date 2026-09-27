@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "admin:create": "node scripts/create-admin.mjs",
-    "admin:cleanup-mock": "node scripts/cleanup-mock-users.mjs"
+    "admin:cleanup-mock": "node scripts/cleanup-mock-users.mjs",
+    "catalog:seed": "node scripts/seed-catalog.mjs"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",
