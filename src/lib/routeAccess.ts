@@ -43,7 +43,7 @@ function statusHome(status: UserStatus | null): string {
 export function resolveAppAccess(auth: AuthSnapshot): AccessDecision {
   if (auth.isLoading) return loading;
   if (!auth.isAuthenticated || !auth.status) return redirect('/login');
-  if (auth.status !== 'active') return redirect(statusHome(auth.status));
+  if (auth.status !== 'approved') return redirect(statusHome(auth.status));
   return allow;
 }
 
@@ -58,7 +58,7 @@ export function resolveAdminAccess(auth: AuthSnapshot): AccessDecision {
 /** /login, /register — already-signed-in active users go back to the app. */
 export function resolveGuestAccess(auth: AuthSnapshot): AccessDecision {
   if (auth.isLoading) return loading;
-  if (auth.isAuthenticated && auth.status === 'active') return redirect('/app');
+  if (auth.isAuthenticated && auth.status === 'approved') return redirect('/app');
   return allow;
 }
 
@@ -70,7 +70,7 @@ export function resolveStatusAccess(
   if (auth.isLoading) return loading;
   if (!auth.isAuthenticated || !auth.status) return redirect('/login');
   if (auth.status === pageStatus) return allow;
-  if (auth.status === 'active') return redirect('/app');
+  if (auth.status === 'approved') return redirect('/app');
   return redirect(statusHome(auth.status));
 }
 

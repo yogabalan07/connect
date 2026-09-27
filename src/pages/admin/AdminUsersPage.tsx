@@ -61,7 +61,7 @@ export const AdminUsersPage: React.FC = () => {
             className="w-full px-3 py-2 rounded-xl bg-slate-900 border border-slate-800 text-xs text-slate-200 focus:outline-none"
           >
             <option value="all">All Statuses</option>
-            <option value="active">Active Enrolled</option>
+            <option value="approved">Approved</option>
             <option value="pending">Pending Approval</option>
             <option value="blocked">Restricted / Blocked</option>
           </select>
@@ -124,9 +124,9 @@ export const AdminUsersPage: React.FC = () => {
                     {u.reputation}
                   </td>
                   <td className="p-4">
-                    {u.status === 'active' && (
+                    {u.status === 'approved' && (
                       <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded">
-                        Active
+                        Approved
                       </span>
                     )}
                     {u.status === 'pending' && (

@@ -21,7 +21,7 @@ export const AdminDashboardPage: React.FC = () => {
 
   const totalUsers = users.length;
   const pendingUsers = users.filter(u => u.status === 'pending');
-  const activeUsers = users.filter(u => u.status === 'active');
+  const activeUsers = users.filter(u => u.status === 'approved');
   const blockedUsers = users.filter(u => u.status === 'blocked');
   const pendingReports = reports.filter(r => r.status === 'pending');
 

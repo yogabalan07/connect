@@ -1,12 +1,13 @@
 /**
  * Service barrel + bootstrapping.
  *
- * UI  ->  hooks/context  ->  services  ->  adapter (MOCK today, FIREBASE next)
+ * UI  ->  hooks/context  ->  services  ->  adapters (Firebase Authentication
+ * and Firestore; tests inject in-memory doubles through `setAuthAdapter` /
+ * `setUserAdapter`).
  *
- * `bootstrapServices` is intentionally synchronous for the mock adapter so
- * the first paint has data ready. The Firebase adapter will keep stores in
- * `loading` until the first snapshot arrives, and pages already render
- * skeletons for that state.
+ * `bootstrapServices` starts each store's first read. Stores render
+ * skeletons while that read is in flight and an adapter failure is captured
+ * as a typed store status instead of an exception.
  */
 import { userService } from './userService';
 import { doubtService } from './doubtService';

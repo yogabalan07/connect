@@ -96,13 +96,13 @@ interface AppContextType {
   sendMessage: (receiverId: string, text: string, codeSnippet?: Message['codeSnippet']) => void;
 
   // Profile
-  updateUserProfile: (data: EditableProfilePatch) => void;
+  updateUserProfile: (data: EditableProfilePatch) => Promise<void>;
 
   // Admin & moderation
-  approveUser: (userId: string) => void;
-  rejectUser: (userId: string) => void;
-  blockUser: (userId: string) => void;
-  unblockUser: (userId: string) => void;
+  approveUser: (userId: string) => Promise<void>;
+  rejectUser: (userId: string) => Promise<void>;
+  blockUser: (userId: string) => Promise<void>;
+  unblockUser: (userId: string) => Promise<void>;
   dismissReport: (reportId: string) => void;
   resolveReport: (reportId: string, actionTaken: string) => void;
   deleteReportedContent: (reportId: string) => Promise<void>;
@@ -195,6 +195,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       try {
         action(currentUser);
+      } catch (error) {
+        toastStore.add(errorMessage(error), 'error');
+      }
+    },
+    [currentUser]
+  );
+
+  /**
+   * Same contract as `run`, for operations that persist (profile edits,
+   * approvals): the success toast fires only once Firestore accepted the
+   * write, and any typed failure leaves as a toast instead of an unhandled
+   * rejection.
+   */
+  const runAsync = useCallback(
+    async (action: (user: User) => Promise<unknown>): Promise<void> => {
+      if (!currentUser) {
+        toastStore.add('You must be signed in to do that.', 'error');
+        return;
+      }
+      try {
+        await action(currentUser);
       } catch (error) {
         toastStore.add(errorMessage(error), 'error');
       }
@@ -416,14 +437,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // --------------------------------------------------------------- Profile
   const updateUserProfile = useCallback(
-    (data: EditableProfilePatch) => {
-      run(user => {
-        userService.updateProfile(user.id, data);
+    (data: EditableProfilePatch): Promise<void> =>
+      runAsync(async user => {
+        await userService.updateUserProfile(user.id, data);
         toastStore.add('Profile updated successfully!', 'success');
-      });
-    },
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentUser]
+    [runAsync]
   );
 
   // ---------------------------------------------------------------- Admin
@@ -438,49 +458,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const approveUser = useCallback(
-    (userId: string) => {
+    async (userId: string): Promise<void> => {
       const target = userService.getById(userId);
-      withToast(
-        () => admin.approveUser(userId),
-        `Account for ${target ? target.name : 'User'} has been approved!`
-      );
+      await runAsync(async () => {
+        await admin.approveUser(userId);
+        toastStore.add(`Account for ${target ? target.name : 'User'} has been approved!`, 'success');
+      });
     },
-    [admin, withToast]
+    [admin, runAsync]
   );
 
   const rejectUser = useCallback(
-    (userId: string) => {
+    async (userId: string): Promise<void> => {
       const target = userService.getById(userId);
-      withToast(
-        () => admin.rejectUser(userId),
-        `Registration for ${target ? target.name : 'User'} rejected — the record is kept as "rejected".`,
-        'info'
-      );
+      await runAsync(async () => {
+        await admin.rejectUser(userId);
+        toastStore.add(
+          `Registration for ${target ? target.name : 'User'} rejected — the record is kept as "rejected".`,
+          'info'
+        );
+      });
     },
-    [admin, withToast]
+    [admin, runAsync]
   );
 
   const blockUser = useCallback(
-    (userId: string) => {
+    async (userId: string): Promise<void> => {
       const target = userService.getById(userId);
-      withToast(
-        () => admin.blockUser(userId),
-        `User ${target ? target.name : 'User'} has been blocked.`,
-        'warning'
-      );
+      await runAsync(async () => {
+        await admin.blockUser(userId);
+        toastStore.add(`User ${target ? target.name : 'User'} has been blocked.`, 'warning');
+      });
     },
-    [admin, withToast]
+    [admin, runAsync]
   );
 
   const unblockUser = useCallback(
-    (userId: string) => {
+    async (userId: string): Promise<void> => {
       const target = userService.getById(userId);
-      withToast(
-        () => admin.unblockUser(userId),
-        `User ${target ? target.name : 'User'} has been unblocked.`
-      );
+      await runAsync(async () => {
+        await admin.unblockUser(userId);
+        toastStore.add(`User ${target ? target.name : 'User'} has been unblocked.`, 'success');
+      });
     },
-    [admin, withToast]
+    [admin, runAsync]
   );
 
   const dismissReport = useCallback(
@@ -579,7 +600,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     (ann: Omit<Announcement, 'id' | 'createdAt' | 'authorName' | 'isActive'>) => {
       run(user => {
         const created = admin.createAnnouncement(ann);
-        userService.getUsers().filter(u => u.status === 'active').forEach(u => {
+        userService.getUsers().filter(u => u.status === 'approved').forEach(u => {
           notificationService.push({
             userId: u.id,
             type: 'announcement',

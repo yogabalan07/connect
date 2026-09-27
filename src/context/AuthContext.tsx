@@ -67,6 +67,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     authService.start();
   }, []);
 
+  // A profile that cannot be resolved (read failure, or an identity without
+  // a usable `users/{uid}` document) is reported once instead of silently
+  // bouncing the user between routes.
+  useEffect(() => {
+    if (!session.profileError) return;
+    toastStore.add(session.profileError, 'error');
+  }, [session.profileError]);
+
   const currentUser = useMemo(() => {
     if (!session.uid) return null;
     return users.find(u => u.id === session.uid) ?? null;

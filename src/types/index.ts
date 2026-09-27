@@ -5,11 +5,11 @@ export type UserRole = 'student' | 'mentor' | 'admin';
 /**
  * Lifecycle of a campus account.
  * - pending:  registered, waiting for department admin approval
- * - active:   fully enabled
+ * - approved: fully enabled (unblocked)
  * - rejected: application was denied (record is preserved for audit history)
  * - blocked:  temporarily restricted by moderation
  */
-export type UserStatus = 'active' | 'pending' | 'rejected' | 'blocked';
+export type UserStatus = 'approved' | 'pending' | 'rejected' | 'blocked';
 
 export type DoubtPriority = 'low' | 'normal' | 'high' | 'urgent';
 

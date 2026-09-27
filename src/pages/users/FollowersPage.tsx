@@ -9,7 +9,7 @@ export const FollowersPage: React.FC = () => {
   if (!currentUser) return null;
 
   // Show peers who follow current user
-  const followerUsers = users.filter(u => u.id !== currentUser.id && u.status === 'active').slice(0, 9);
+  const followerUsers = users.filter(u => u.id !== currentUser.id && u.status === 'approved').slice(0, 9);
 
   return (
     <div className="space-y-6">

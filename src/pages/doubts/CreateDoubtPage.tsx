@@ -147,7 +147,7 @@ export const CreateDoubtPage: React.FC = () => {
   };
 
   const filteredUsers = users
-    .filter(u => u.id !== currentUser.id && u.status === 'active')
+    .filter(u => u.id !== currentUser.id && u.status === 'approved')
     .filter(
       u =>
         u.name.toLowerCase().includes(participantSearch.toLowerCase()) ||

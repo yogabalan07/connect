@@ -24,7 +24,7 @@ export const RightSidebar: React.FC = () => {
 
   // Suggested users (exclude current user and already following)
   const suggestedUsers = users
-    .filter(u => u.id !== currentUser.id && !followingUserIds.includes(u.id) && u.status === 'active')
+    .filter(u => u.id !== currentUser.id && !followingUserIds.includes(u.id) && u.status === 'approved')
     .slice(0, 3);
 
   return (

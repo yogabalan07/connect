@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminSettings, Announcement, User } from '../types';
 import { useAdminStore, adminService } from '../services/adminService';
 import { useReportsStore, reportService } from '../services/reportService';
@@ -8,8 +8,13 @@ import { useAuth } from './useAuth';
 
 /**
  * Admin/moderation surface: user approval, report queue, announcements,
- * audit trail and moderation policies. Every mutation goes through a service
- * so Cloud Functions / Firestore can replace the mock adapter later.
+ * audit trail and moderation policies.
+ *
+ * Account transitions are async because they are persisted by the user
+ * adapter: every call resolves only after Firestore accepted the write, so
+ * the audit entry and the caller's toast can never claim an approval that
+ * did not happen. Failures (missing permission, unknown account) propagate
+ * as typed `ServiceError`s for the UI to render.
  */
 export function useAdmin() {
   const adminState = useAdminStore();
@@ -18,54 +23,92 @@ export function useAdmin() {
 
   const actor: User | null = currentUser;
 
-  const approveUser = useCallback((userId: string) => {
-    const target = userService.getById(userId);
-    userService.setStatus(userId, 'active');
-    adminService.logAudit({
-      actor: actor ? actor.name : 'System',
-      action: 'Approved student account',
-      target: target ? `${target.name} (${target.department})` : userId,
-      timestamp: 'Just now',
-      type: 'user'
-    });
-  }, [actor]);
+  // The admin queue is re-read from Firestore on every admin session so a
+  // pending registration submitted by someone else shows up without a reload.
+  // Dependencies are plain strings: a directory merge replaces user objects
+  // and would otherwise refetch in a loop.
+  const [pendingUsers, setPendingUsers] = useState<User[]>([]);
+  const actorId = actor?.id ?? null;
+  const actorRole = actor?.role ?? null;
 
-  const rejectUser = useCallback((userId: string) => {
-    const target = userService.getById(userId);
-    // Record is preserved as `rejected` for audit history — never deleted.
-    userService.setStatus(userId, 'rejected');
-    adminService.logAudit({
-      actor: actor ? actor.name : 'System',
-      action: 'Rejected student registration',
-      target: target ? target.email : userId,
-      timestamp: 'Just now',
-      type: 'user'
-    });
-  }, [actor]);
+  useEffect(() => {
+    if (!actorId || actorRole !== 'admin') return;
+    let cancelled = false;
+    void userService
+      .listPendingUsers()
+      .then(list => {
+        if (!cancelled) setPendingUsers(list);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [actorId, actorRole]);
 
-  const blockUser = useCallback((userId: string) => {
-    const target = userService.getById(userId);
-    userService.setStatus(userId, 'blocked');
-    adminService.logAudit({
-      actor: actor ? actor.name : 'System',
-      action: 'Blocked account',
-      target: target ? target.name : userId,
-      timestamp: 'Just now',
-      type: 'moderation'
-    });
-  }, [actor]);
+  const approveUser = useCallback(
+    async (userId: string): Promise<User> => {
+      const target = userService.getById(userId);
+      const updated = await userService.approveUser(userId);
+      adminService.logAudit({
+        actor: actor ? actor.name : 'System',
+        action: 'Approved student account',
+        target: target ? `${target.name} (${target.department})` : userId,
+        timestamp: 'Just now',
+        type: 'user'
+      });
+      return updated;
+    },
+    [actor]
+  );
 
-  const unblockUser = useCallback((userId: string) => {
-    const target = userService.getById(userId);
-    userService.setStatus(userId, 'active');
-    adminService.logAudit({
-      actor: actor ? actor.name : 'System',
-      action: 'Unblocked account',
-      target: target ? target.name : userId,
-      timestamp: 'Just now',
-      type: 'moderation'
-    });
-  }, [actor]);
+  const rejectUser = useCallback(
+    async (userId: string): Promise<User> => {
+      const target = userService.getById(userId);
+      const updated = await userService.rejectUser(userId);
+      // Record is preserved as `rejected` for audit history — never deleted.
+      adminService.logAudit({
+        actor: actor ? actor.name : 'System',
+        action: 'Rejected student registration',
+        target: target ? target.email : userId,
+        timestamp: 'Just now',
+        type: 'user'
+      });
+      return updated;
+    },
+    [actor]
+  );
+
+  const blockUser = useCallback(
+    async (userId: string): Promise<User> => {
+      const target = userService.getById(userId);
+      const updated = await userService.blockUser(userId);
+      adminService.logAudit({
+        actor: actor ? actor.name : 'System',
+        action: 'Blocked account',
+        target: target ? target.name : userId,
+        timestamp: 'Just now',
+        type: 'moderation'
+      });
+      return updated;
+    },
+    [actor]
+  );
+
+  const unblockUser = useCallback(
+    async (userId: string): Promise<User> => {
+      const target = userService.getById(userId);
+      const updated = await userService.unblockUser(userId);
+      adminService.logAudit({
+        actor: actor ? actor.name : 'System',
+        action: 'Unblocked account',
+        target: target ? target.name : userId,
+        timestamp: 'Just now',
+        type: 'moderation'
+      });
+      return updated;
+    },
+    [actor]
+  );
 
   const dismissReport = useCallback((reportId: string) => {
     reportService.dismissReport(reportId);
@@ -108,6 +151,7 @@ export function useAdmin() {
 
   return {
     reports: reportState.reports,
+    pendingUsers,
     announcements: adminState.announcements,
     auditLogs: adminState.auditLogs,
     warnings,

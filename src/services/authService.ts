@@ -4,6 +4,7 @@ import { ServiceError, ServiceResult, fail, ok } from '../lib/errors';
 import { userService } from './userService';
 import { AuthAdapter, AuthUser, getAuthAdapter, setAuthAdapter as setBackendAdapter } from './authAdapter';
 import { mapAuthError } from './authErrors';
+import { mapFirestoreError } from './firestoreErrors';
 
 /**
  * Authentication domain service (Firebase Authentication).
@@ -16,7 +17,14 @@ import { mapAuthError } from './authErrors';
  * - Passwords are handed straight to the adapter and never stored, logged or
  *   written to any store, browser storage or profile document.
  * - Role/status are application profile data (defaults: student / pending) and
- *   are always read from the user record, never from the credential layer.
+ *   are always read from `users/{uid}`, never from the credential layer.
+ * - The profile behind a session is restored from Firestore: the session is
+ *   settled synchronously so guards never block on a read, and the profile is
+ *   resolved right after (deduplicated per UID so a restore, a sign-in and a
+ *   registration cannot race each other into duplicate creates).
+ * - When the profile cannot be read the session fails closed instead of
+ *   stranding the user in a session no guard can render, and the reason is
+ *   surfaced through `sessionStore.profileError`.
  * - Every SDK failure leaves as a `ServiceError` with its original
  *   `auth/...` code, mapped to campus-friendly copy by `authErrors`.
  */
@@ -39,16 +47,25 @@ export interface AuthSessionState {
   /** `firebase` for real sessions, `dev` for the local persona helper. */
   source: 'firebase' | 'dev' | null;
   emailVerified: boolean;
+  /**
+   * Why the profile behind the session could not be resolved (read failure or
+   * an identity without a profile). Null while everything is healthy; shown
+   * once by the UI instead of silently bouncing the user around.
+   */
+  profileError: string | null;
 }
 
 const MIN_PASSWORD_LENGTH = 6;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PROFILE_MISSING_MESSAGE =
+  'Your account profile could not be loaded. Contact your department administrator.';
 
 const INITIAL_SESSION: AuthSessionState = {
   isLoading: true,
   uid: null,
   source: null,
-  emailVerified: false
+  emailVerified: false,
+  profileError: null
 };
 
 const sessionStore = createStore<AuthSessionState>({ ...INITIAL_SESSION });
@@ -79,23 +96,82 @@ function assertDevBuild(): void {
   }
 }
 
-/** Ensures the directory has a profile for a Firebase identity (uid = id). */
-function provisionProfile(user: AuthUser): User | null {
-  return userService.ensureProfileForAuthUser({
-    uid: user.uid,
-    email: user.email,
-    displayName: user.displayName
-  });
+/** Profile restores currently running, keyed by UID (dedupes listeners). */
+const inFlightRestores = new Map<string, Promise<User | null>>();
+
+function forgetRestores(): void {
+  inFlightRestores.clear();
+}
+
+/**
+ * Resolves `users/{uid}` for a Firebase identity.
+ *
+ * Never rejects: failures fail the session closed (uid cleared, reason kept in
+ * `profileError`) and are reported through the returned `null`, so both the
+ * fire-and-forget listener path and an awaited sign-in share one behaviour.
+ * Concurrent calls for the same UID share a single promise — Firebase can
+ * replay `onAuthStateChanged` while a sign-in is still in flight, and a
+ * second create must never race the first one.
+ */
+function restoreProfile(user: AuthUser): Promise<User | null> {
+  const running = inFlightRestores.get(user.uid);
+  if (running) return running;
+
+  const task = (async (): Promise<User | null> => {
+    try {
+      const profile = await userService.ensureProfileForAuthUser({
+        uid: user.uid,
+        email: user.email,
+        displayName: user.displayName
+      });
+
+      // The session may have moved on while the read was in flight.
+      if (sessionStore.get().uid !== user.uid) return profile;
+
+      if (profile) {
+        userService.setActor(profile);
+        sessionStore.set(prev => (prev.profileError ? { ...prev, profileError: null } : prev));
+        return profile;
+      }
+
+      sessionStore.set(prev => ({ ...prev, profileError: PROFILE_MISSING_MESSAGE }));
+      return null;
+    } catch (error) {
+      const mapped = mapFirestoreError(error);
+      if (sessionStore.get().uid !== user.uid) return null;
+      // Fail closed: no profile means no role/status, so no session.
+      userService.setActor(null);
+      sessionStore.set({
+        ...INITIAL_SESSION,
+        isLoading: false,
+        profileError: mapped.message
+      });
+      return null;
+    }
+  })();
+
+  inFlightRestores.set(user.uid, task);
+  const settle = (): void => {
+    if (inFlightRestores.get(user.uid) === task) inFlightRestores.delete(user.uid);
+  };
+  task.then(settle, settle);
+
+  return task;
 }
 
 function applyFirebaseUser(user: AuthUser): void {
-  provisionProfile(user);
+  const cached = userService.getById(user.uid) ?? null;
   sessionStore.set({
     isLoading: false,
     uid: user.uid,
     source: 'firebase',
-    emailVerified: user.emailVerified
+    emailVerified: user.emailVerified,
+    profileError: cached ? null : sessionStore.get().profileError
   });
+  userService.setActor(cached);
+  // Refresh from Firestore even when the profile is already cached, so an
+  // approval or a block made elsewhere is picked up on the next visit.
+  void restoreProfile(user);
 }
 
 /** Single consumer of `onAuthStateChanged`. */
@@ -112,6 +188,7 @@ function handleAuthState(user: AuthUser | null): void {
     return;
   }
 
+  userService.setActor(null);
   sessionStore.set({ ...INITIAL_SESSION, isLoading: false });
 }
 
@@ -121,6 +198,8 @@ let unsubscribeAdapter: (() => void) | null = null;
 function bindAdapter(adapter: AuthAdapter): void {
   unsubscribeAdapter?.();
   boundAdapter = adapter;
+  forgetRestores();
+  userService.setActor(null);
   sessionStore.set({ ...INITIAL_SESSION });
   unsubscribeAdapter = adapter.subscribe(handleAuthState);
 }
@@ -141,6 +220,12 @@ function currentAdapter(): AuthAdapter {
 
 function toFail(error: unknown): ServiceResult<never> {
   return fail(mapAuthError(error).message);
+}
+
+/** Drops the local session after a failed action without revoking the user. */
+function endSession(): void {
+  userService.setActor(null);
+  sessionStore.set({ ...INITIAL_SESSION, isLoading: false });
 }
 
 export const authService = {
@@ -183,15 +268,18 @@ export const authService = {
     ensureListening();
     try {
       const authUser = await currentAdapter().signIn(normalized, password);
-      const profile = provisionProfile(authUser) ?? userService.getById(authUser.uid);
+      // `onAuthStateChanged` may already have started this restore; awaiting
+      // the same promise keeps one read and one create.
+      const profile = await restoreProfile(authUser);
       if (!profile) {
+        const message = sessionStore.get().profileError ?? PROFILE_MISSING_MESSAGE;
         // Authenticated but unusable: leave the client signed out instead of
         // stranding the user in a session no guard can render.
         await currentAdapter()
           .signOut()
           .catch(() => undefined);
-        sessionStore.set({ ...INITIAL_SESSION, isLoading: false });
-        return fail('Your account profile could not be loaded. Contact your department administrator.');
+        endSession();
+        return fail(message);
       }
       applyFirebaseUser(authUser);
       return ok(profile);
@@ -221,30 +309,23 @@ export const authService = {
       let profile: User;
       try {
         // `onAuthStateChanged` may already have provisioned a provisional
-        // profile for this brand-new UID: upsert instead of failing.
-        profile = userService.getById(authUser.uid)
-          ? userService.updateProfile(authUser.uid, {
-              name,
-              department: input.department,
-              year: input.year,
-              skills: input.skills,
-              ...(input.section ? { section: input.section } : {})
-            })
-          : userService.createPendingUser({
-              id: authUser.uid, // Firebase UID = canonical identity
-              name,
-              email,
-              department: input.department,
-              year: input.year,
-              section: input.section,
-              skills: input.skills
-            });
+        // profile for this brand-new UID: the service upserts it instead of
+        // failing, and it is the only place that accepts registration data.
+        profile = await userService.registerProfile({
+          id: authUser.uid, // Firebase UID = canonical identity
+          name,
+          email,
+          department: input.department,
+          year: input.year,
+          section: input.section,
+          skills: input.skills
+        });
       } catch (error) {
         // Never leave an auth account without a matching profile.
         await currentAdapter()
           .signOut()
           .catch(() => undefined);
-        sessionStore.set({ ...INITIAL_SESSION, isLoading: false });
+        endSession();
         return toFail(error);
       }
 
@@ -263,7 +344,8 @@ export const authService = {
   /** Signs out immediately on the client; Firebase clears its own session. */
   signOut(): void {
     const source = sessionStore.get().source;
-    sessionStore.set({ ...INITIAL_SESSION, isLoading: false });
+    forgetRestores();
+    endSession();
 
     if (source === 'dev') return; // local persona, nothing to revoke remotely
 
@@ -336,13 +418,15 @@ export const authService = {
    */
   switchDevPersona(role: UserRole): User {
     assertDevBuild();
-    const persona =
-      userService.getUsers().find(u => u.role === role && u.status === 'active') ||
-      userService.getUsers().find(u => u.role === role);
-    if (!persona) {
-      throw new ServiceError('auth/no-persona', `No ${role} persona exists in the mock directory.`);
-    }
-    sessionStore.set({ isLoading: false, uid: persona.id, source: 'dev', emailVerified: true });
+    const persona = userService.ensureDevPersona(role);
+    sessionStore.set({
+      isLoading: false,
+      uid: persona.id,
+      source: 'dev',
+      emailVerified: true,
+      profileError: null
+    });
+    userService.setActor(persona);
     return persona;
   }
 };

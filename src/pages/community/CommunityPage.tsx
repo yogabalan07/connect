@@ -7,7 +7,7 @@ import { UserCard } from '../../components/cards/UserCard';
 export const CommunityPage: React.FC = () => {
   const { users, doubts, categories } = useApp();
 
-  const activeUsers = users.filter(u => u.status === 'active');
+  const activeUsers = users.filter(u => u.status === 'approved');
   const topMentors = [...activeUsers].sort((a, b) => b.reputation - a.reputation).slice(0, 6);
   const mostAccepted = [...activeUsers].sort((a, b) => b.acceptedCount - a.acceptedCount).slice(0, 5);
   const newMembers = [...activeUsers].slice(0, 4);

@@ -31,13 +31,13 @@ const blockedStudent: AuthSnapshot = {
 const activeStudent: AuthSnapshot = {
   isLoading: false,
   isAuthenticated: true,
-  status: 'active',
+  status: 'approved',
   role: 'student'
 };
 const activeAdmin: AuthSnapshot = {
   isLoading: false,
   isAuthenticated: true,
-  status: 'active',
+  status: 'approved',
   role: 'admin'
 };
 

@@ -28,7 +28,7 @@ function makeProfile(overrides: Partial<User> = {}): User {
     bio: '',
     skills: [],
     role: 'student',
-    status: 'active',
+    status: 'approved',
     reputation: 0,
     questionsCount: 0,
     answersCount: 0,
@@ -45,7 +45,8 @@ const loadingSession: AuthSessionState = {
   isLoading: true,
   uid: null,
   source: null,
-  emailVerified: false
+  emailVerified: false,
+  profileError: null
 };
 
 const signedOutSession: AuthSessionState = { ...loadingSession, isLoading: false };
@@ -54,7 +55,8 @@ const signedInSession: AuthSessionState = {
   isLoading: false,
   uid: 'uid_1',
   source: 'firebase',
-  emailVerified: false
+  emailVerified: false,
+  profileError: null
 };
 
 describe('toAuthSnapshot', () => {
@@ -89,7 +91,7 @@ describe('toAuthSnapshot', () => {
   });
 
   it('lets an active user into /app and into guest screens only when signed out', () => {
-    const snapshot = toAuthSnapshot(signedInSession, makeProfile({ status: 'active' }));
+    const snapshot = toAuthSnapshot(signedInSession, makeProfile({ status: 'approved' }));
 
     expect(resolveAppAccess(snapshot)).toEqual({ type: 'allow' });
     expect(resolveGuestAccess(snapshot)).toEqual({ type: 'redirect', to: '/app' });
@@ -99,7 +101,7 @@ describe('toAuthSnapshot', () => {
   it('keeps admin routes behind the profile role', () => {
     const snapshot = toAuthSnapshot(
       signedInSession,
-      makeProfile({ status: 'active', role: 'admin' })
+      makeProfile({ status: 'approved', role: 'admin' })
     );
 
     expect(snapshot.role).toBe('admin');

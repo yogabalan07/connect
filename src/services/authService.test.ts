@@ -1,11 +1,23 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ServiceError } from '../lib/errors';
 import { authService } from './authService';
 import type { RegisterInput } from './authService';
-import { userService } from './userService';
+import { userService, resetUserDirectoryForTests } from './userService';
 import type { AuthAdapter, AuthStateListener, AuthUser } from './authAdapter';
+import { setUserAdapter } from './userAdapter';
+import { createFakeUserAdapter } from './testing/fakeUserAdapter';
+import type { FakeUserAdapter } from './testing/fakeUserAdapter';
+
+/**
+ * Drains the promise queue so fire-and-forget profile restores finish.
+ * Profile reads resolve from the in-memory adapter, so one macrotask is
+ * enough to run every pending microtask.
+ */
+const flush = async (): Promise<void> => {
+  await new Promise(resolve => setTimeout(resolve, 0));
+};
 
 /**
  * Deterministic Firebase Auth double.
@@ -133,10 +145,21 @@ const makeRegistration = (overrides: Partial<Record<string, unknown>> = {}) => (
 });
 
 let fake: FakeAuthAdapter;
+let fakeUsers: FakeUserAdapter;
 
 beforeEach(() => {
+  // Fresh profile backend + directory per test: the domain layer must run
+  // hermetically, without a Firebase project and without `.env.local`.
+  resetUserDirectoryForTests();
+  fakeUsers = createFakeUserAdapter();
+  setUserAdapter(fakeUsers);
+
   fake = new FakeAuthAdapter();
   authService.setAuthAdapter(fake);
+});
+
+afterEach(() => {
+  setUserAdapter(null);
 });
 
 describe('authService.register', () => {
@@ -170,7 +193,7 @@ describe('authService.register', () => {
     const malicious = {
       ...makeRegistration(),
       role: 'admin',
-      status: 'active',
+      status: 'approved',
       id: 'i-am-admin'
     } as unknown as RegisterInput;
 
@@ -388,13 +411,17 @@ describe('auth session state', () => {
     expect(authService.getSessionUid()).toBeNull();
   });
 
-  it('restores a persisted Firebase session on startup', () => {
+  it('restores a persisted Firebase session on startup', async () => {
     const persisted = fake.seed('restored@college.edu', 'secret123');
     fake.setUser(persisted); // signed in before the app booted
     authService.setAuthAdapter(fake); // onAuthStateChanged replays the user
 
     expect(authService.isLoading()).toBe(false);
     expect(authService.getSessionUid()).toBe(persisted.uid);
+
+    // The session settles synchronously; the profile behind it is restored
+    // from the profile backend right afterwards.
+    await flush();
 
     const profile = authService.getCurrentUser();
     expect(profile?.id).toBe(persisted.uid);
@@ -413,7 +440,7 @@ describe('authService.switchDevPersona (development only)', () => {
   it('signs in as an active admin persona', () => {
     const persona = authService.switchDevPersona('admin');
     expect(persona.role).toBe('admin');
-    expect(persona.status).toBe('active');
+    expect(persona.status).toBe('approved');
     expect(authService.getSessionUid()).toBe(persona.id);
     expect(authService.sessionStore.get().source).toBe('dev');
   });

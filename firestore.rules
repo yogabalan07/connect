@@ -1,0 +1,29 @@
+rules_version = '2';
+
+// ---------------------------------------------------------------------------
+// PLACEHOLDER — M3 only ships the schema; milestone M4 owns security rules.
+//
+// These rules are intentionally deny-by-default: an accidental deploy of this
+// file can never expose campus data (the app would fail closed instead), and
+// no one gets a false sense of "rules are configured" before M4 lands.
+// Nothing in this repository deploys them — see README (Firebase setup).
+//
+// The policy M4 must encode here, mirroring the domain layer:
+//   * profile reads:  the owning account, or any signed-in member for the
+//     fields the directory needs (name, avatar, department, status, …);
+//   * profile create: only `create()` — the document id must equal
+//     `request.auth.uid`, with `role == 'student'` and `status == 'pending'`
+//     forced by the create rules, so no client can register an admin;
+//   * profile update: allow-listed profile fields only; `role`, `status`,
+//     `id` and the timestamps may only change through an admin check
+//     (`get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'`);
+//   * moderation transitions stay in `approve/reject/block/unblock` calls
+//     that the client cannot forge.
+// ---------------------------------------------------------------------------
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

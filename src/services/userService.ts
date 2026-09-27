@@ -1,37 +1,78 @@
-import { AcademicYear, Department, User, UserStatus } from '../types';
+import { User, UserRole } from '../types';
 import { createStore, LoadStatus, useStore } from '../lib/store';
 import { ServiceError } from '../lib/errors';
 import { mockUsers } from '../data/mockUsers';
+import { EDITABLE_PROFILE_KEYS, getUserAdapter } from './userAdapter';
+import type {
+  AuthProfileIdentity,
+  EditableProfileKey,
+  EditableProfilePatch,
+  NewUserProfile
+} from './userAdapter';
+import { mapFirestoreError } from './firestoreErrors';
 
+export type { EditableProfileKey, EditableProfilePatch };
+
+/**
+ * User directory: registration, profile, moderation status.
+ *
+ * Layering: UI -> context/hooks -> THIS file -> user adapter -> Firebase SDK.
+ *
+ * State lives in a plain store so React subscribes exactly as before; every
+ * read is served from the store and every write goes through the adapter and
+ * is mirrored back into it, which is what keeps pages, guards and the admin
+ * queue in sync after each operation.
+ *
+ * Guarantees:
+ * - The Firebase Auth UID is the canonical id (`users/{uid}`); callers must
+ *   take it from an authenticated identity, never from form input.
+ * - `role`, `status`, `id` and the timestamps are never accepted from a
+ *   profile patch: `updateUserProfile` rejects them, and the adapter only
+ *   serializes allow-listed fields.
+ * - No password (or any credential) is ever accepted, stored or read here.
+ * - Errors leave as typed `ServiceError`s with campus-friendly copy.
+ */
 interface UserDirectory {
   users: User[];
   status: LoadStatus;
   error?: string;
 }
 
+const store = createStore<UserDirectory>({ users: [], status: 'loading' });
+
+/** Identity acting on the directory (set by the auth service on every change). */
+let actor: User | null = null;
+
 /**
- * Profile fields a signed-in user may edit on their own record.
+ * Serializes profile work per UID.
  *
- * Identity (`id`, `email`), authorization (`role`, `status`), ownership and
- * the derived counters are deliberately excluded: a client profile update can
- * never grant privileges, change moderation state or rewrite who owns a row.
+ * `onAuthStateChanged`, a sign-in and a registration can all race for the
+ * same brand-new profile; chaining them guarantees the create happens once
+ * instead of twice.
  */
-const EDITABLE_PROFILE_KEYS = [
-  'name',
-  'username',
-  'avatar',
-  'coverImage',
-  'department',
-  'year',
-  'section',
-  'bio',
-  'skills'
-] as const;
+const uidLocks = new Map<string, Promise<unknown>>();
 
-export type EditableProfileKey = (typeof EDITABLE_PROFILE_KEYS)[number];
+function withUidLock<T>(uid: string, task: () => Promise<T>): Promise<T> {
+  const previous = uidLocks.get(uid) ?? Promise.resolve();
+  const next = previous.then(task, task);
+  uidLocks.set(
+    uid,
+    next.then(
+      () => undefined,
+      () => undefined
+    )
+  );
+  return next;
+}
 
-/** Narrow patch accepted by `userService.updateProfile`. */
-export type EditableProfilePatch = Partial<Pick<User, EditableProfileKey>>;
+/** Runs an adapter call and guarantees a typed, campus-friendly failure. */
+async function viaAdapter<T>(task: () => Promise<T>): Promise<T> {
+  try {
+    return await task();
+  } catch (error) {
+    throw mapFirestoreError(error);
+  }
+}
 
 function assertEditableProfilePatch(patch: EditableProfilePatch): void {
   for (const key of Object.keys(patch)) {
@@ -41,23 +82,103 @@ function assertEditableProfilePatch(patch: EditableProfilePatch): void {
   }
 }
 
-const store = createStore<UserDirectory>({ users: mockUsers, status: 'loading' });
+/** The acting identity, re-read from the directory so role changes apply at once. */
+function currentActor(): User | null {
+  const current = actor;
+  if (!current) return null;
+  return store.get().users.find(u => u.id === current.id) ?? current;
+}
 
-function requireUser(userId: string): User {
-  const user = store.get().users.find(u => u.id === userId);
-  if (!user) throw new ServiceError('user/not-found', 'That account no longer exists.');
-  return user;
+function requireOwner(userId: string): User {
+  const current = currentActor();
+  if (!current) throw new ServiceError('user/forbidden', 'Sign in to edit your profile.');
+  if (current.id !== userId) {
+    throw new ServiceError('user/forbidden', 'You can only edit your own profile.');
+  }
+  return current;
+}
+
+function requireAdmin(): User {
+  const current = currentActor();
+  if (!current || current.role !== 'admin') {
+    throw new ServiceError('user/forbidden', 'Only administrators can manage accounts.');
+  }
+  return current;
+}
+
+function upsert(user: User): void {
+  store.set(prev => {
+    const exists = prev.users.some(u => u.id === user.id);
+    return {
+      ...prev,
+      users: exists ? prev.users.map(u => (u.id === user.id ? user : u)) : [user, ...prev.users]
+    };
+  });
 }
 
 /**
- * User directory: registration, profile, moderation status.
- * Mock implementation — swap the store feed for Firestore `users` snapshots.
+ * Fetched directory first, then everything this client already knows.
+ *
+ * A list query issued before a just-created profile would otherwise drop the
+ * signed-in user out of the directory and bounce the UI back to /login.
  */
+function mergeDirectory(fetched: User[], existing: User[]): User[] {
+  const byId = new Map<string, User>();
+  for (const user of existing) byId.set(user.id, user);
+  for (const user of fetched) byId.set(user.id, user);
+  return Array.from(byId.values());
+}
+
+/** Creates `users/{uid}` through the adapter (role/status are fixed there). */
+async function createLocked(uid: string, profile: NewUserProfile): Promise<User> {
+  if (userService.emailExists(profile.email)) {
+    throw new ServiceError('user/email-taken', 'An account with this college email already exists.');
+  }
+  if (store.get().users.some(u => u.id === uid)) {
+    throw new ServiceError('user/id-taken', 'That account already exists.');
+  }
+  const created = await viaAdapter(() => getUserAdapter().createUserProfile(uid, profile));
+  upsert(created);
+  return created;
+}
+
+function transition(
+  operation: 'approveUser' | 'rejectUser' | 'blockUser' | 'unblockUser'
+): (uid: string) => Promise<User> {
+  return async (uid: string): Promise<User> => {
+    // Client-side guard for UX only — Firestore rules are the real boundary.
+    requireAdmin();
+    return withUidLock(uid, async () => {
+      const updated = await viaAdapter(() => getUserAdapter()[operation](uid));
+      upsert(updated);
+      return updated;
+    });
+  };
+}
+
 export const userService = {
   store,
 
+  /** Loads the Firestore directory once at boot (keeps stores honest). */
   bootstrap(): void {
-    store.set(prev => ({ ...prev, status: 'ready' }));
+    store.set(prev => ({ ...prev, status: 'loading', error: undefined }));
+    void userService.loadDirectory();
+  },
+
+  /** Replaces the directory contents with the persisted ones. */
+  async loadDirectory(): Promise<void> {
+    try {
+      const fetched = await viaAdapter(() => getUserAdapter().listUsers());
+      store.set(prev => ({
+        ...prev,
+        users: mergeDirectory(fetched, prev.users),
+        status: 'ready',
+        error: undefined
+      }));
+    } catch (error) {
+      const mapped = mapFirestoreError(error);
+      store.set(prev => ({ ...prev, status: 'error', error: mapped.message }));
+    }
   },
 
   getUsers(): User[] {
@@ -79,123 +200,181 @@ export const userService = {
   },
 
   /**
-   * Creates a pending account. Passwords never reach this layer.
-   * `id` is the Firebase Auth UID when the profile is created for an
-   * authenticated identity — it is the canonical user id everywhere else in
-   * the app. Role and status are fixed by the server-side policy: a client
-   * registration can never choose them (never admin).
+   * Publishes the identity acting on the directory (called by the auth
+   * service on sign-in, restore, persona switch and sign-out).
    */
-  createPendingUser(input: {
-    id?: string;
-    name: string;
-    email: string;
-    department: Department;
-    year: AcademicYear;
-    section?: string;
-    skills: string[];
-  }): User {
-    if (userService.emailExists(input.email)) {
-      throw new ServiceError('user/email-taken', 'An account with this college email already exists.');
-    }
+  setActor(user: User | null): void {
+    actor = user;
+  },
 
-    const id = input.id?.trim() || `user-${Date.now()}`;
-    if (store.get().users.some(u => u.id === id)) {
-      throw new ServiceError('user/id-taken', 'That account already exists.');
-    }
+  /** Reads `users/{uid}` from the adapter and keeps it in the directory. */
+  async getUserProfile(uid: string): Promise<User | null> {
+    const profile = await viaAdapter(() => getUserAdapter().getUserProfile(uid));
+    if (profile) upsert(profile);
+    return profile;
+  },
 
-    const newUser: User = {
-      id,
-      name: input.name.trim() || 'New Student',
-      username: `student_${Date.now().toString().slice(-6)}`,
-      email: input.email.trim().toLowerCase(),
-      avatar:
-        'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
-      department: input.department,
-      year: input.year,
-      section: input.section || 'A',
-      bio: 'Aspiring engineering student exploring academics and tech doubts.',
-      skills: input.skills,
-      role: 'student',
-      status: 'pending',
-      reputation: 0,
-      questionsCount: 0,
-      answersCount: 0,
-      acceptedCount: 0,
-      followersCount: 0,
-      followingCount: 0,
-      joinedDate: 'Just now',
-      badges: []
-    };
+  /**
+   * Creates a pending profile for an authenticated identity.
+   *
+   * `id` is the Firebase Auth UID supplied by the auth layer. It is never
+   * taken from registration form input, and the adapter always writes
+   * `role: student` / `status: pending`, so no client-side payload can
+   * register an administrator or an approved account.
+   */
+  async createUserProfile(input: { id: string } & NewUserProfile): Promise<User> {
+    const uid = input.id.trim();
+    if (!uid) throw new ServiceError('user/invalid-id', 'That account identity is not valid.');
+    const { id: _identity, ...profile } = input;
+    return withUidLock(uid, () => createLocked(uid, profile));
+  },
 
-    store.set(prev => ({ ...prev, users: [newUser, ...prev.users] }));
-    return newUser;
+  /**
+   * Registration upsert: creates `users/{uid}` when the identity has no
+   * profile, otherwise applies the registration details to the provisional
+   * profile created by `onAuthStateChanged` — keeping its role and status.
+   */
+  async registerProfile(input: { id: string } & NewUserProfile): Promise<User> {
+    const uid = input.id.trim();
+    if (!uid) throw new ServiceError('user/invalid-id', 'That account identity is not valid.');
+    const { id: _identity, ...profile } = input;
+
+    return withUidLock(uid, async () => {
+      const existing = await viaAdapter(() => getUserAdapter().getUserProfile(uid));
+      if (!existing) return createLocked(uid, profile);
+
+      const patch: EditableProfilePatch = { name: profile.name };
+      if (profile.department !== undefined) patch.department = profile.department;
+      if (profile.year !== undefined) patch.year = profile.year;
+      if (profile.section !== undefined) patch.section = profile.section;
+      if (profile.skills !== undefined) patch.skills = profile.skills;
+      if (profile.username !== undefined) patch.username = profile.username;
+      if (profile.bio !== undefined) patch.bio = profile.bio;
+      if (profile.avatar !== undefined) patch.avatar = profile.avatar;
+
+      const updated = await viaAdapter(() => getUserAdapter().updateUserProfile(uid, patch));
+      upsert(updated);
+      return updated;
+    });
   },
 
   /**
    * Resolves the application profile for a Firebase Auth identity.
    *
-   * The Firebase UID is the canonical id: if the directory has no profile for
-   * it (profile created before the users milestone, imported account, data
-   * loss), a minimal `pending` profile is provisioned on the spot so the UI
-   * never renders a half-signed-in state. Returns null when the identity
-   * carries no email — callers must then handle "authenticated but no profile"
-   * without crashing.
+   * Firebase UID -> `users/{uid}` -> profile. An existing document is
+   * returned untouched (a reload keeps approved/admin/pending/rejected/
+   * blocked exactly as persisted); a minimal `pending` profile is only
+   * provisioned when the document does not exist yet. Returns `null` when
+   * the identity carries no email — callers then render "authenticated but
+   * no profile" without crashing.
    */
-  ensureProfileForAuthUser(authUser: {
-    uid: string;
-    email: string | null;
-    displayName: string | null;
-  }): User | null {
-    const existing = store.get().users.find(u => u.id === authUser.uid);
-    if (existing) return existing;
-    if (!authUser.email) return null;
+  async ensureProfileForAuthUser(authUser: AuthProfileIdentity): Promise<User | null> {
+    const uid = authUser.uid.trim();
+    if (!uid) return null;
 
-    try {
-      return userService.createPendingUser({
-        id: authUser.uid,
-        name: (authUser.displayName || authUser.email.split('@')[0] || 'New Student').trim(),
-        email: authUser.email,
-        department: 'CSE',
-        year: '1st',
-        section: 'A',
-        skills: []
-      });
-    } catch {
-      // Email already bound to a different profile: leave the directory alone.
-      return null;
-    }
+    return withUidLock(uid, async () => {
+      const existing = await viaAdapter(() => getUserAdapter().getUserProfile(uid));
+      if (existing) {
+        upsert(existing);
+        return existing;
+      }
+      if (!authUser.email) return null;
+
+      try {
+        return await createLocked(uid, {
+          name: (authUser.displayName || authUser.email.split('@')[0] || 'New Student').trim(),
+          email: authUser.email,
+          department: 'CSE' as const,
+          year: '1st' as const,
+          section: 'A',
+          skills: []
+        });
+      } catch (error) {
+        // Email/id already bound elsewhere: leave the directory alone rather
+        // than shadowing another account's record.
+        if (error instanceof ServiceError) {
+          if (error.code === 'user/email-taken' || error.code === 'user/id-taken') return null;
+        }
+        throw error;
+      }
+    });
   },
 
   /**
-   * Applies a profile edit to the user's own record.
+   * Applies an allow-listed edit to the user's own profile and persists it.
    *
-   * Accepts only `EditableProfilePatch` — enforced again at runtime so a
-   * JavaScript caller passing `id`, `email`, `role` or `status` is rejected
-   * instead of silently mutating identity or authorization fields.
+   * Immutable fields (`id`, `email`, `role`, `status`, timestamps) are
+   * rejected twice: by the TypeScript patch type and at runtime, so a
+   * JavaScript caller passing `role`/`status` still cannot escalate itself.
    */
-  updateProfile(userId: string, patch: EditableProfilePatch): User {
-    requireUser(userId);
+  async updateUserProfile(userId: string, patch: EditableProfilePatch): Promise<User> {
     assertEditableProfilePatch(patch);
+    requireOwner(userId);
 
-    const updated: User = { ...requireUser(userId), ...patch, id: userId };
-    store.set(prev => ({
-      ...prev,
-      users: prev.users.map(u => (u.id === userId ? updated : u))
-    }));
-    return updated;
+    return withUidLock(userId, async () => {
+      const updated = await viaAdapter(() => getUserAdapter().updateUserProfile(userId, patch));
+      upsert(updated);
+      const current = actor;
+      if (current && current.id === userId) actor = updated;
+      return updated;
+    });
   },
 
-  /** Single choke point for status transitions (approve/reject/block/unblock). */
-  setStatus(userId: string, status: UserStatus): User {
-    requireUser(userId);
-    store.set(prev => ({
-      ...prev,
-      users: prev.users.map(u => (u.id === userId ? { ...u, status } : u))
-    }));
-    return { ...requireUser(userId), status };
+  /** Admin queue straight from Firestore (also merged into the directory). */
+  async listPendingUsers(): Promise<User[]> {
+    const pending = await viaAdapter(() => getUserAdapter().listPendingUsers());
+    store.set(prev => ({ ...prev, users: mergeDirectory(pending, prev.users) }));
+    return pending;
   },
 
-  adjustStats(userId: string, patch: Partial<Pick<User, 'reputation' | 'questionsCount' | 'answersCount' | 'acceptedCount' | 'followersCount'>>): void {
+  /** pending -> approved */
+  approveUser: transition('approveUser'),
+  /** pending -> rejected (record kept for audit history). */
+  rejectUser: transition('rejectUser'),
+  /** approved -> blocked */
+  blockUser: transition('blockUser'),
+  /** blocked -> approved */
+  unblockUser: transition('unblockUser'),
+
+  /**
+   * DEV/test only: resolves a demo persona for local persona switching,
+   * seeding the mock record when the directory has no matching account.
+   * Production builds never reach the seed (see `import.meta.env.DEV`).
+   */
+  ensureDevPersona(role: UserRole): User {
+    const directory = store.get().users;
+    const findIn = (users: User[]): User | undefined =>
+      users.find(u => u.role === role && u.status === 'approved') ?? users.find(u => u.role === role);
+
+    const existing = findIn(directory);
+    if (existing) return existing;
+
+    if (!import.meta.env.DEV) {
+      throw new ServiceError('user/dev-only', 'Demo personas are only available in development.');
+    }
+
+    const seed = findIn(mockUsers);
+    if (!seed) {
+      throw new ServiceError('auth/no-persona', `No ${role} persona exists in the mock directory.`);
+    }
+    upsert(seed);
+    return seed;
+  },
+
+  /**
+   * Derived counters (reputation, question/answer totals). Still local-only:
+   * the content that produces them is migrated in a later milestone, so
+   * these deliberately never reach Firestore yet.
+   */
+  adjustStats(
+    userId: string,
+    patch: Partial<
+      Pick<
+        User,
+        'reputation' | 'questionsCount' | 'answersCount' | 'acceptedCount' | 'followersCount'
+      >
+    >
+  ): void {
     store.set(prev => ({
       ...prev,
       users: prev.users.map(u => {
@@ -215,4 +394,11 @@ export const userService = {
 /** React subscription to the user directory. */
 export function useUsersStore(): UserDirectory {
   return useStore(store);
+}
+
+/** Test seam: empties the directory and forgets the acting identity. */
+export function resetUserDirectoryForTests(): void {
+  actor = null;
+  uidLocks.clear();
+  store.set({ users: [], status: 'loading', error: undefined });
 }
