@@ -5,6 +5,7 @@ import {
   AuditLog,
   Answer,
   Category,
+  Comment,
   Conversation,
   Doubt,
   Message,
@@ -17,7 +18,7 @@ import {
 import { LoadStatus, useStore } from '../lib/store';
 import { toastStore, ToastItem } from '../lib/toastStore';
 import { ServiceError, errorMessage } from '../lib/errors';
-import { extractMentions } from '../utils/mentions';
+import { mentionsFor } from '../utils/mentions';
 import { bootstrapServices } from '../services';
 import {
   adminService,
@@ -81,7 +82,12 @@ interface AppContextType {
   deleteAnswer: (answerId: string) => Promise<void>;
   acceptAnswer: (doubtId: string, answerId: string) => Promise<void>;
   toggleVoteAnswer: (answerId: string, type: 'up' | 'down') => Promise<void>;
+  getDoubtComments: (doubtId: string) => Comment[];
+  addCommentToDoubt: (doubtId: string, text: string, parentCommentId?: string) => Promise<void>;
   addCommentToAnswer: (answerId: string, text: string, parentCommentId?: string) => Promise<void>;
+  /** Edit and delete are author-or-admin (see `canEditComment`). */
+  updateComment: (commentId: string, text: string) => Promise<void>;
+  deleteComment: (commentId: string) => Promise<void>;
 
   // Social
   toggleFollowUser: (userId: string) => Promise<void>;
@@ -224,18 +230,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     [currentUser]
   );
 
+  /**
+   * Notification fan-out runs after the write that caused it has already
+   * committed, so a refused or offline delivery must not roll the user's
+   * toast back into an error - the content is there either way.
+   */
+  const bestEffort = useCallback(async (task: () => Promise<unknown>): Promise<void> => {
+    try {
+      await task();
+    } catch {
+      /* delivery is best-effort; the audit trail still shows the action */
+    }
+  }, []);
+
   // ---------------------------------------------------------------- Doubts
   const createDoubt = useCallback(
     async (input: CreateDoubtInput): Promise<string> => {
       try {
         const user = requireUser();
+        const mentions = mentionsFor(input.description, userService.getUsers());
         const doubt = await doubtService.create(user, {
           ...input,
-          mentions: extractMentions(input.description)
+          mentions: mentions.handles,
+          mentionIds: mentions.ids
         });
         userService.adjustStats(user.id, { questionsCount: 1, reputation: 5 });
         await catalogService.adjustQuestionCount(doubt.category, 1);
         logDoubtAction(user, doubt.title, doubt.visibility);
+        await bestEffort(() =>
+          notificationService.notifyMentions(
+            mentions.ids,
+            user,
+            `/app/doubts/${doubt.id}`,
+            input.description
+          )
+        );
         toastStore.add('Your doubt was posted to the campus hub!', 'success');
         return doubt.id;
       } catch (error) {
@@ -308,22 +337,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     (doubtId: string, content: string, codeSnippet?: Answer['codeSnippet']) =>
       runAsync(async user => {
         const doubt = doubtService.getById(doubtId);
-        await answerService.add(doubtId, user, content, codeSnippet, extractMentions(content));
+        const mentions = mentionsFor(content, userService.getUsers());
+        await answerService.add(doubtId, user, content, codeSnippet, mentions.handles, mentions.ids);
         userService.adjustStats(user.id, { answersCount: 1, reputation: 10 });
 
-        if (doubt && doubt.authorId !== user.id) {
-          await notificationService.push({
-            userId: doubt.authorId,
-            type: 'answer',
-            title: 'New Solution on your Question',
-            message: `${user.name} posted an answer to: "${doubt.title.slice(0, 50)}..."`,
-            timestamp: 'Just now',
-            read: false,
-            link: `/app/doubts/${doubtId}`,
-            senderName: user.name,
-            senderAvatar: user.avatar
-          });
+        if (doubt) {
+          await bestEffort(() =>
+            notificationService.notifyNewAnswer(doubt.authorId, user, doubtId, doubt.title)
+          );
         }
+        await bestEffort(() =>
+          notificationService.notifyMentions(mentions.ids, user, `/app/doubts/${doubtId}`, content)
+        );
 
         toastStore.add('Your solution has been submitted!', 'success');
       }),
@@ -361,19 +386,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
         if (isNowAccepted && answer) {
           userService.adjustStats(answer.authorId, { reputation: 15, acceptedCount: 1 });
-          if (answer.authorId !== user.id) {
-            await notificationService.push({
-              userId: answer.authorId,
-              type: 'accepted',
-              title: 'Answer Accepted! (+15 Rep)',
-              message: `${user.name} marked your answer as the accepted solution!`,
-              timestamp: 'Just now',
-              read: false,
-              link: `/app/doubts/${doubtId}`,
-              senderName: user.name,
-              senderAvatar: user.avatar
-            });
-          }
+          await bestEffort(() =>
+            notificationService.notifyAcceptedAnswer(answer.authorId, user, doubtId)
+          );
           toastStore.add('Marked as Accepted Answer! (+15 Reputation awarded)', 'success');
         } else {
           toastStore.add('Unmarked accepted answer.', 'info');
@@ -391,11 +406,89 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   }, []);
 
+  const getDoubtComments = useCallback(
+    (doubtId: string): Comment[] => answerService.getDoubtComments(doubtId),
+    []
+  );
+
+  const addCommentToDoubt = useCallback(
+    (doubtId: string, text: string, parentCommentId?: string) =>
+      runAsync(async user => {
+        const doubt = doubtService.getById(doubtId);
+        const mentions = mentionsFor(text, userService.getUsers());
+        await answerService.addDoubtComment(
+          doubtId,
+          user,
+          text,
+          parentCommentId,
+          mentions.handles,
+          mentions.ids
+        );
+        if (doubt) {
+          await bestEffort(() =>
+            notificationService.notifyComment(doubt.authorId, user, doubtId, doubt.title, text, false)
+          );
+        }
+        await bestEffort(() =>
+          notificationService.notifyMentions(mentions.ids, user, `/app/doubts/${doubtId}`, text)
+        );
+        toastStore.add('Comment published.', 'success');
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentUser, runAsync]
+  );
+
   const addCommentToAnswer = useCallback(
     (answerId: string, text: string, parentCommentId?: string) =>
       runAsync(async user => {
-        await answerService.addComment(answerId, user, text, parentCommentId, extractMentions(text));
+        const answer = answerService.getAll().find(a => a.id === answerId);
+        const doubt = answer ? doubtService.getById(answer.doubtId) : null;
+        const mentions = mentionsFor(text, userService.getUsers());
+        await answerService.addComment(
+          answerId,
+          user,
+          text,
+          parentCommentId,
+          mentions.handles,
+          mentions.ids
+        );
+
+        if (doubt) {
+          // The asker and the answerer both own this thread, minus the
+          // commenter themselves (`notify` drops self-addressed events).
+          const audience = Array.from(
+            new Set([doubt.authorId, answer ? answer.authorId : ''].filter(Boolean))
+          );
+          for (const recipientId of audience) {
+            await bestEffort(() =>
+              notificationService.notifyComment(recipientId, user, doubt.id, doubt.title, text, true)
+            );
+          }
+          await bestEffort(() =>
+            notificationService.notifyMentions(mentions.ids, user, `/app/doubts/${doubt.id}`, text)
+          );
+        }
         toastStore.add('Comment published.', 'success');
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentUser, runAsync]
+  );
+
+  const updateComment = useCallback(
+    (commentId: string, text: string) =>
+      runAsync(async user => {
+        await answerService.updateComment(commentId, user, text);
+        toastStore.add('Comment updated.', 'success');
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentUser, runAsync]
+  );
+
+  const deleteComment = useCallback(
+    (commentId: string) =>
+      runAsync(async user => {
+        await answerService.removeComment(commentId, user);
+        toastStore.add('Comment deleted.', 'info');
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [currentUser, runAsync]
@@ -410,17 +503,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         userService.adjustStats(userId, { followersCount: nowFollowing ? 1 : -1 });
 
         if (nowFollowing && target) {
-          await notificationService.push({
-            userId: target.id,
-            type: 'follow',
-            title: 'New Follower',
-            message: `${user.name} (${user.department}, ${user.year} Year) started following you.`,
-            timestamp: 'Just now',
-            read: false,
-            link: `/app/users/${user.id}`,
-            senderName: user.name,
-            senderAvatar: user.avatar
-          });
+          await bestEffort(() =>
+            notificationService.notifyFollow(
+              target.id,
+              user,
+              `${user.department}, ${user.year} Year`
+            )
+          );
         }
 
         toastStore.add(
@@ -496,26 +585,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const approveUser = useCallback(
     async (userId: string): Promise<void> => {
       const target = userService.getById(userId);
-      await runAsync(async () => {
+      await runAsync(async actor => {
         await admin.approveUser(userId);
+        await bestEffort(() => notificationService.notifyAdminApproval(userId, actor, 'approved'));
         toastStore.add(`Account for ${target ? target.name : 'User'} has been approved!`, 'success');
       });
     },
-    [admin, runAsync]
+    [admin, runAsync, bestEffort]
   );
 
   const rejectUser = useCallback(
     async (userId: string): Promise<void> => {
       const target = userService.getById(userId);
-      await runAsync(async () => {
+      await runAsync(async actor => {
         await admin.rejectUser(userId);
+        await bestEffort(() => notificationService.notifyAdminApproval(userId, actor, 'rejected'));
         toastStore.add(
           `Registration for ${target ? target.name : 'User'} rejected — the record is kept as "rejected".`,
           'info'
         );
       });
     },
-    [admin, runAsync]
+    [admin, runAsync, bestEffort]
   );
 
   const blockUser = useCallback(
@@ -637,17 +728,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       void runAsync(async user => {
         const created = admin.createAnnouncement(ann);
         const approved = userService.getUsers().filter(u => u.status === 'approved');
-        for (const member of approved) {
-          await notificationService.push({
-            userId: member.id,
-            type: 'announcement',
-            title: `Campus Announcement: ${created.title}`,
-            message: created.content,
-            timestamp: 'Just now',
-            read: false,
-            senderName: created.authorName
-          });
-        }
+        await bestEffort(() =>
+          notificationService.notifyAnnouncement(
+            approved.map(member => member.id),
+            user,
+            created.title,
+            created.content
+          )
+        );
         toastStore.add('Campus announcement broadcasted!', 'success');
       });
     },
@@ -740,7 +828,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       deleteAnswer,
       acceptAnswer,
       toggleVoteAnswer,
+      getDoubtComments,
+      addCommentToDoubt,
       addCommentToAnswer,
+      updateComment,
+      deleteComment,
       toggleFollowUser,
       toggleFollowTag,
       markNotificationRead,
@@ -794,7 +886,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       deleteAnswer,
       acceptAnswer,
       toggleVoteAnswer,
+      getDoubtComments,
+      addCommentToDoubt,
       addCommentToAnswer,
+      updateComment,
+      deleteComment,
       toggleFollowUser,
       toggleFollowTag,
       markNotificationRead,

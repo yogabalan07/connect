@@ -185,6 +185,7 @@ service cloud.firestore {
           'codeSnippet',
           'attachments',
           'mentions',
+          'mentionIds',
           'updatedAtMs'
         ];
       }
@@ -345,7 +346,7 @@ service cloud.firestore {
         }
 
         function answerContentKeys() {
-          return ['content', 'codeSnippet', 'attachments', 'mentions', 'updatedAtMs'];
+          return ['content', 'codeSnippet', 'attachments', 'mentions', 'mentionIds', 'updatedAtMs'];
         }
 
         function answerAcceptedFlagMatches() {
@@ -463,13 +464,24 @@ service cloud.firestore {
           && request.resource.data.content.size() > 0
           && request.resource.data.content.size() <= 2000
           && request.resource.data.answerId is string
+          // `''` marks a question-level clarification; anything else must name
+          // an answer that really lives under this doubt, so a comment cannot
+          // be attached to an answer from a different question.
+          && (request.resource.data.answerId == ''
+            || exists(answerPath(doubtId, request.resource.data.answerId)))
           && saneTime(request.resource.data.createdAtMs);
 
+        /** The body plus its edit stamp - ownership, mentions, counters and
+         *  the doubt/answer it hangs off are all immutable. Moderators may
+         *  rewrite a comment they did not write. */
         allow update: if approved(caller())
-          && resource.data.authorId == request.auth.uid
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content'])
+          && (resource.data.authorId == request.auth.uid || admin(caller()))
+          && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['content', 'updatedAtMs'])
           && request.resource.data.content is string
-          && request.resource.data.content.size() > 0;
+          && request.resource.data.content.size() > 0
+          && request.resource.data.content.size() <= 2000
+          && saneTime(request.resource.data.updatedAtMs);
 
         /** Own comments, anything a moderator removes, a doubt author clearing
          *  their own question's thread, and the author of the answer a comment
@@ -612,15 +624,50 @@ service cloud.firestore {
 
     // ----------------------------------------------------- notifications
     match /notifications/{notificationId} {
+
+      /**
+       * Which event kinds a signed-in member may mint, and for whom.
+       *
+       * - `mention` / `answer` / `accepted` / `comment` are ordinary member
+       *   events; `userId != request.auth.uid` in the create rule already
+       *   stops anyone writing into their own inbox.
+       * - `admin_approval` and `announcement` carry institutional authority,
+       *   so only an admin may produce them - a student cannot announce.
+       * - `follow` must agree with a `follows/{target}_{uid}` document the
+       *   caller really created, which is what stops a fabricated
+       *   "you have a new follower".
+       */
+      function eventAllowed(d) {
+        return d.type in ['mention', 'answer', 'accepted', 'comment']
+          || (d.type in ['admin_approval', 'announcement'] && admin(caller()))
+          || (d.type == 'follow'
+              && exists(/databases/$(database)/documents/follows/$(d.userId + '_' + request.auth.uid)));
+      }
+
       allow read: if approved(caller()) && resource.data.userId == request.auth.uid;
 
       allow create: if approved(caller())
         && request.resource.data.userId is string
+        && request.resource.data.userId != request.auth.uid
+        // `senderId` is the identity of whoever caused the event and can only
+        // ever be the caller; `source` is stamped `client` by the adapter, so
+        // a browser cannot claim to be a trusted server process.
+        && request.resource.data.senderId is string
+        && request.resource.data.senderId == request.auth.uid
+        && request.resource.data.source == 'client'
         && request.resource.data.type in [
           'mention', 'answer', 'accepted', 'follow', 'comment', 'admin_approval', 'announcement'
         ]
+        && eventAllowed(request.resource.data)
+        && request.resource.data.senderName is string
+        && request.resource.data.senderName.size() > 0
+        && request.resource.data.senderName.size() <= 100
         && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 200
         && request.resource.data.message is string
+        && request.resource.data.message.size() > 0
+        && request.resource.data.message.size() <= 2000
         && request.resource.data.read == false
         && saneTime(request.resource.data.createdAtMs);
 

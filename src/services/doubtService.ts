@@ -33,6 +33,8 @@ export interface CreateDoubtInput {
   codeSnippet?: Doubt['codeSnippet'];
   attachments?: Doubt['attachments'];
   mentions?: string[];
+  /** Resolved UIDs behind `mentions` - see `mentionsFor`. */
+  mentionIds?: string[];
 }
 
 export interface UpdateDoubtInput {
@@ -176,7 +178,8 @@ export const doubtService = {
       hasAcceptedAnswer: false,
       codeSnippet: input.codeSnippet,
       attachments: input.attachments,
-      mentions: input.mentions
+      mentions: input.mentions,
+      mentionIds: input.mentionIds
     };
 
     const created = await viaAdapter(() => getContentAdapter().createDoubt(draft));

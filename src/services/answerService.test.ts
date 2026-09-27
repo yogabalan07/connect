@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { setServiceActor } from './actor';
 import { setContentAdapter } from './contentAdapter';
-import { answerService, canEditAnswer, resetAnswerStoreForTests } from './answerService';
+import { answerService, canDeleteComment, canEditAnswer, canEditComment, resetAnswerStoreForTests } from './answerService';
 import { createFakeContentAdapter } from './testing/fakeContentAdapter';
 import type { FakeContentAdapter } from './testing/fakeContentAdapter';
 import { makeAnswer, makeDoubt, makeUser } from './testing/contentFixtures';
@@ -353,5 +353,170 @@ describe('answerService.addComment', () => {
       code: 'comment/invalid'
     });
     expect(fake.comments(doubtId)).toEqual([]);
+  });
+});
+
+describe('answerService doubt-level comments', () => {
+  it('keeps question clarifications out of every answer thread', async () => {
+    const answer = await answerService.add(doubtId, mentor, 'First take');
+
+    const comment = await answerService.addDoubtComment(doubtId, author, 'What have you tried?');
+
+    expect(comment.answerId).toBe('');
+    expect(comment.doubtId).toBe(doubtId);
+
+    const thread = answerService.getDoubtComments(doubtId);
+    expect(thread).toHaveLength(1);
+    expect(thread[0]).toMatchObject({ content: 'What have you tried?', authorId: author.id });
+    expect('doubtId' in thread[0]).toBe(false);
+    expect('answerId' in thread[0]).toBe(false);
+    expect(answerService.getForDoubt(doubtId)[0].comments).toEqual([]);
+    expect(fake.comments(doubtId)).toHaveLength(1);
+  });
+
+  it('hydrates both threads from a single read', async () => {
+    const answer = await answerService.add(doubtId, mentor, 'First take');
+    await answerService.addComment(answer.id, author, 'On the answer');
+    await answerService.addDoubtComment(doubtId, stranger, 'On the question');
+
+    answerService.removeForDoubt(doubtId);
+    await answerService.loadForDoubt(doubtId);
+
+    expect(answerService.getDoubtComments(doubtId).map(c => c.content)).toEqual([
+      'On the question'
+    ]);
+    expect(answerService.getForDoubt(doubtId)[0].comments.map(c => c.content)).toEqual([
+      'On the answer'
+    ]);
+  });
+
+  it('refuses an empty clarification', async () => {
+    await expect(answerService.addDoubtComment(doubtId, author, '   ')).rejects.toMatchObject({
+      code: 'comment/invalid'
+    });
+    expect(fake.comments(doubtId)).toEqual([]);
+  });
+
+  it('forgets both threads when the doubt is deleted', async () => {
+    const answer = await answerService.add(doubtId, mentor, 'First take');
+    await answerService.addComment(answer.id, author, 'On the answer');
+    await answerService.addDoubtComment(doubtId, author, 'On the question');
+
+    answerService.removeForDoubt(doubtId);
+
+    expect(answerService.getForDoubt(doubtId)).toEqual([]);
+    expect(answerService.getDoubtComments(doubtId)).toEqual([]);
+  });
+
+  it('ignores clarifications that belong to a different question', async () => {
+    await answerService.addDoubtComment(doubtId, author, 'On this question');
+
+    expect(answerService.getDoubtComments('doubt-other')).toEqual([]);
+  });
+});
+
+describe('answerService.updateComment', () => {
+  it('lets the author rewrite their own comment and stamps the edit', async () => {
+    const answer = await answerService.add(doubtId, mentor, 'First take');
+    const comment = await answerService.addComment(answer.id, author, 'Can you elaborate?');
+
+    await answerService.updateComment(comment.id, author, 'Could you elaborate on step 3?');
+
+    const stored = answerService.getForDoubt(doubtId)[0].comments[0];
+    expect(stored.content).toBe('Could you elaborate on step 3?');
+    expect(stored.updatedAt).toBeTruthy();
+    expect(fake.comments(doubtId)[0].content).toBe('Could you elaborate on step 3?');
+    expect(fake.comments(doubtId)[0].mentions).toEqual(comment.mentions);
+  });
+
+  it('refuses an edit from anyone but the author, including the answerer', async () => {
+    const answer = await answerService.add(doubtId, mentor, 'First take');
+    const comment = await answerService.addComment(answer.id, author, 'Can you elaborate?');
+
+    await expect(
+      answerService.updateComment(comment.id, stranger, 'Hijacked')
+    ).rejects.toMatchObject({ code: 'comment/forbidden' });
+    await expect(
+      answerService.updateComment(comment.id, mentor, 'Also hijacked')
+    ).rejects.toMatchObject({ code: 'comment/forbidden' });
+
+    expect(fake.comments(doubtId)[0].content).toBe('Can you elaborate?');
+  });
+
+  it('lets a moderator edit a comment they did not write', async () => {
+    const comment = await answerService.addDoubtComment(doubtId, author, 'Original');
+
+    await answerService.updateComment(comment.id, admin, 'Moderated');
+
+    expect(answerService.getDoubtComments(doubtId)[0].content).toBe('Moderated');
+    expect(fake.comments(doubtId)[0].content).toBe('Moderated');
+  });
+
+  it('refuses a blank edit and skips one that changes nothing', async () => {
+    const comment = await answerService.addDoubtComment(doubtId, author, 'Original');
+
+    await expect(answerService.updateComment(comment.id, author, '  ')).rejects.toMatchObject({
+      code: 'comment/invalid'
+    });
+    await answerService.updateComment(comment.id, author, 'Original');
+
+    expect(fake.calls.updateComment).toBe(0);
+    expect(fake.comments(doubtId)[0].content).toBe('Original');
+  });
+
+  it('fails on a comment that was never loaded', async () => {
+    await expect(
+      answerService.updateComment('comm-ghost', author, 'Ghost')
+    ).rejects.toMatchObject({ code: 'comment/not-found' });
+  });
+});
+
+describe('answerService.removeComment', () => {
+  it('lets the author and an administrator delete, and nobody else', async () => {
+    const comment = await answerService.addDoubtComment(doubtId, author, 'Original');
+
+    await expect(answerService.removeComment(comment.id, stranger)).rejects.toMatchObject({
+      code: 'comment/forbidden'
+    });
+    expect(fake.comments(doubtId)).toHaveLength(1);
+
+    await answerService.removeComment(comment.id, admin);
+    expect(fake.comments(doubtId)).toEqual([]);
+    expect(answerService.getDoubtComments(doubtId)).toEqual([]);
+  });
+
+  it('clears an answer comment from the thread it hangs off', async () => {
+    const answer = await answerService.add(doubtId, mentor, 'First take');
+    const comment = await answerService.addComment(answer.id, author, 'On the answer');
+
+    await answerService.removeComment(comment.id, author);
+
+    expect(answerService.getForDoubt(doubtId)[0].comments).toEqual([]);
+    expect(fake.comments(doubtId)).toEqual([]);
+  });
+
+  it('fails on a comment that was never loaded', async () => {
+    await expect(answerService.removeComment('comm-ghost', author)).rejects.toMatchObject({
+      code: 'comment/not-found'
+    });
+  });
+});
+
+describe('comment moderation policy', () => {
+  it('separates editing (author only) from deleting (author or admin)', async () => {
+    const comment = await answerService.addDoubtComment(doubtId, author, 'Original');
+    const stored = answerService.getDoubtComments(doubtId)[0];
+
+    expect(canEditComment(stored, author)).toBe(true);
+    expect(canEditComment(stored, admin)).toBe(true);
+    expect(canEditComment(stored, stranger)).toBe(false);
+    expect(canEditComment(stored, null)).toBe(false);
+
+    expect(canDeleteComment(stored, author)).toBe(true);
+    expect(canDeleteComment(stored, admin)).toBe(true);
+    expect(canDeleteComment(stored, stranger)).toBe(false);
+    expect(canDeleteComment(stored, null)).toBe(false);
+
+    expect(comment.answerId).toBe('');
   });
 });

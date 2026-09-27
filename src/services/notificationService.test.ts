@@ -13,6 +13,7 @@ import type { Notification } from '../types';
  * ever holds the signed-in member's own events.
  */
 const member = makeUser({ id: 'uid_member', role: 'student', status: 'approved' });
+const mentor = makeUser({ id: 'uid_mentor', role: 'mentor', status: 'approved' });
 
 const PERMISSION_COPY = 'You do not have permission to do that. Contact your department administrator.';
 
@@ -21,6 +22,7 @@ let fake: FakeContentAdapter;
 function draft(overrides: Partial<Omit<Notification, 'id'>> = {}): Omit<Notification, 'id'> {
   return {
     userId: member.id,
+    senderId: 'uid_other',
     type: 'answer',
     title: 'New answer on your doubt',
     message: 'Mentor replied to "Merge sort overflow".',
@@ -97,6 +99,85 @@ describe('notificationService.push', () => {
       message: PERMISSION_COPY
     });
     expect(notificationService.getAll()).toEqual([]);
+  });
+});
+
+describe('notificationService fan-out', () => {
+  const actor = { id: member.id, name: member.name, avatar: member.avatar };
+
+  it('stamps the caller as the sender and never writes into their own inbox', async () => {
+    const self = await notificationService.notify(member.id, actor, {
+      type: 'answer',
+      title: 'Answered your own question',
+      message: 'You answered yourself.'
+    });
+
+    expect(self).toBeNull();
+    expect(fake.notificationsFor(member.id)).toEqual([]);
+  });
+
+  it('creates one event per distinct recipient, all attributed to the actor', async () => {
+    const created = await notificationService.notifyAll(
+      [member.id, 'uid_b', 'uid_c', 'uid_b'],
+      actor,
+      { type: 'mention', title: 'Mentioned you', message: 'Take a look.' }
+    );
+
+    expect(created.map(n => n.userId)).toEqual(['uid_b', 'uid_c']);
+    expect(created.every(n => n.senderId === member.id)).toBe(true);
+    expect(created.every(n => n.senderName === member.name)).toBe(true);
+    expect(created.every(n => n.source === 'client')).toBe(true);
+    expect(created.every(n => n.read === false)).toBe(true);
+    expect(created.every(n => n.type === 'mention')).toBe(true);
+  });
+
+  it('writes the product copy for each interaction event', async () => {
+    const events = [
+      await notificationService.notifyNewAnswer(member.id, mentor, 'doubt-1', 'Merge sort overflow'),
+      await notificationService.notifyAcceptedAnswer(member.id, mentor, 'doubt-1'),
+      await notificationService.notifyComment(
+        member.id,
+        mentor,
+        'doubt-1',
+        'Merge sort overflow',
+        'needs more detail',
+        true
+      ),
+      await notificationService.notifyFollow(member.id, mentor, 'CSE, 3rd Year'),
+      await notificationService.notifyAdminApproval(member.id, mentor, 'approved')
+    ];
+
+    expect(events.map(e => e?.type)).toEqual(['answer', 'accepted', 'comment', 'follow', 'admin_approval']);
+    expect(events.every(e => e?.senderId === mentor.id)).toBe(true);
+    expect(events.every(e => e?.link?.startsWith('/'))).toBe(true);
+    expect(events[3]?.message).toContain('CSE, 3rd Year');
+    expect(events[1]?.title).toContain('Accepted');
+  });
+
+  it('broadcasts an announcement to every approved member except its author', async () => {
+    const created = await notificationService.notifyAnnouncement(
+      [member.id, 'uid_b', member.id],
+      actor,
+      'Mid-term schedule',
+      'Exams start Monday.'
+    );
+
+    expect(created.map(n => n.userId)).toEqual(['uid_b']);
+    expect(created[0].title).toBe('Campus Announcement: Mid-term schedule');
+    expect(created[0].message).toBe('Exams start Monday.');
+    expect(created[0].link).toBeUndefined();
+  });
+
+  it('surfaces a refused delivery as the campus permission copy', async () => {
+    fake.setDenied(true);
+
+    await expect(
+      notificationService.notify('uid_b', actor, {
+        type: 'answer',
+        title: 'New Solution on your Question',
+        message: 'Replied.'
+      })
+    ).rejects.toMatchObject({ code: 'firestore/permission-denied', message: PERMISSION_COPY });
   });
 });
 

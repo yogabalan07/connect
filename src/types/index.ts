@@ -66,10 +66,19 @@ export interface Comment {
   authorAvatar: string;
   content: string;
   createdAt: string;
+  /** Set only by an edit; absent while the comment is untouched. */
+  updatedAt?: string;
   /** Set when this comment is a reply to another comment (threading prep). */
   parentCommentId?: string;
   /** Handles mentioned in the comment body, e.g. ["priya_sundar"]. */
   mentions?: string[];
+  /**
+   * Structured mention reference: the Firebase UIDs `mentions[]` resolved to.
+   * Handles are display data; these IDs are the only thing a notification
+   * fan-out is allowed to act on, so an unresolvable `@handle` can never
+   * address a user that is not in the directory.
+   */
+  mentionIds?: string[];
 }
 
 export interface Answer {
@@ -87,6 +96,8 @@ export interface Answer {
   attachments?: Attachment[];
   comments: Comment[];
   mentions?: string[];
+  /** `mentions[]` resolved to real user IDs (see `resolveMentions`). */
+  mentionIds?: string[];
   userVote?: 'up' | 'down' | null;
 }
 
@@ -112,6 +123,8 @@ export interface Doubt {
   codeSnippet?: CodeSnippet;
   attachments?: Attachment[];
   mentions?: string[];
+  /** `mentions[]` resolved to real user IDs (see `resolveMentions`). */
+  mentionIds?: string[];
   isPinned?: boolean;
   userVote?: 'up' | 'down' | null;
   isBookmarked?: boolean;
@@ -132,7 +145,14 @@ export interface Doubt {
 
 export interface Notification {
   id: string;
+  /** The member the inbox belongs to - never the person who caused the event. */
   userId: string;
+  /**
+   * The member who caused the event. Required on write: `firestore.rules`
+   * pins it to `request.auth.uid`, so no one can raise an event that
+   * impersonates somebody else.
+   */
+  senderId: string;
   type: 'mention' | 'answer' | 'accepted' | 'follow' | 'comment' | 'admin_approval' | 'announcement';
   title: string;
   message: string;
@@ -141,6 +161,13 @@ export interface Notification {
   link?: string;
   senderAvatar?: string;
   senderName?: string;
+  /**
+   * `client` = raised by the app from the browser; `server` = raised by a
+   * trusted backend (Cloud Functions / Admin SDK). Clients may only ever
+   * write `client`, which the rules enforce, so a future server-generated
+   * event is distinguishable from a self-asserted one.
+   */
+  source?: 'client' | 'server';
 }
 
 export interface Message {

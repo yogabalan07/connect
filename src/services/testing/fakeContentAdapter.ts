@@ -12,6 +12,7 @@ import type {
   AnswerContentPatch,
   AnswerStatePatch,
   CommentRecord,
+  CommentUpdate,
   ContentAdapter,
   DoubtContentPatch,
   DoubtStatePatch,
@@ -72,6 +73,7 @@ const METHODS = [
   'setAcceptedAnswer',
   'listComments',
   'createComment',
+  'updateComment',
   'deleteComment',
   'listVotes',
   'saveVote',
@@ -321,6 +323,19 @@ export function createFakeContentAdapter(): FakeContentAdapter {
       const existing = store.comments.get(commentId);
       if (!existing || existing.doubtId !== doubtId) throw notFound();
       store.comments.delete(commentId);
+    },
+
+    async updateComment(doubtId: string, commentId: string, patch: CommentUpdate): Promise<CommentRecord> {
+      count('updateComment');
+      const existing = store.comments.get(commentId);
+      if (!existing || existing.doubtId !== doubtId) throw notFound();
+      const updated: CommentRecord = {
+        ...existing,
+        content: patch.content,
+        updatedAt: relativeTime(Date.now())
+      };
+      store.comments.set(commentId, updated);
+      return { ...updated };
     },
 
     // --------------------------------------------------------------- Votes

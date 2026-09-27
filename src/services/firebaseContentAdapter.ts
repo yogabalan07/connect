@@ -33,6 +33,7 @@ import type {
   AnswerContentPatch,
   AnswerStatePatch,
   CommentRecord,
+  CommentUpdate,
   ContentAdapter,
   DoubtContentPatch,
   DoubtStatePatch,
@@ -197,6 +198,7 @@ export function toDoubt(data: DocumentData, id: string): Doubt {
     codeSnippet: toCodeSnippet(data.codeSnippet),
     attachments: toAttachments(data.attachments),
     mentions: strList(data.mentions),
+    mentionIds: strList(data.mentionIds),
     isPinned: bool(data.isPinned) || undefined,
     lastAnswerId: typeof data.lastAnswerId === 'string' ? data.lastAnswerId : null,
     acceptedAnswerId: typeof data.acceptedAnswerId === 'string' ? data.acceptedAnswerId : null
@@ -218,6 +220,7 @@ function toAnswer(data: DocumentData, id: string, doubtId: string): Answer {
     codeSnippet: toCodeSnippet(data.codeSnippet),
     attachments: toAttachments(data.attachments),
     mentions: strList(data.mentions),
+    mentionIds: strList(data.mentionIds),
     comments: []
   };
 }
@@ -230,8 +233,10 @@ function toComment(data: DocumentData, id: string): CommentRecord {
     authorAvatar: str(data.authorAvatar),
     content: str(data.content),
     createdAt: relativeTime(num(data.createdAtMs)),
+    updatedAt: data.updatedAtMs === undefined ? undefined : relativeTime(num(data.updatedAtMs)),
     parentCommentId: optStr(data.parentCommentId),
-    mentions: strList(data.mentions)
+    mentions: strList(data.mentions),
+    mentionIds: strList(data.mentionIds)
   };
   return { ...comment, doubtId: str(data.doubtId), answerId: str(data.answerId) };
 }
@@ -264,6 +269,7 @@ function toNotification(data: DocumentData, id: string): Notification {
   return {
     id,
     userId: str(data.userId),
+    senderId: str(data.senderId),
     type: (data.type as Notification['type']) ?? 'answer',
     title: str(data.title),
     message: str(data.message),
@@ -271,7 +277,8 @@ function toNotification(data: DocumentData, id: string): Notification {
     read: bool(data.read),
     link: optStr(data.link),
     senderName: optStr(data.senderName),
-    senderAvatar: optStr(data.senderAvatar)
+    senderAvatar: optStr(data.senderAvatar),
+    source: data.source === 'server' ? 'server' : 'client'
   };
 }
 
@@ -296,6 +303,7 @@ function serializeDoubt(doubt: Doubt): DocumentData {
     codeSnippet: doubt.codeSnippet,
     attachments: doubt.attachments,
     mentions: doubt.mentions,
+    mentionIds: doubt.mentionIds,
     isPinned: doubt.isPinned ?? false
   };
 }
@@ -312,7 +320,8 @@ function serializeAnswer(answer: Answer): DocumentData {
     isAccepted: answer.isAccepted,
     codeSnippet: answer.codeSnippet,
     attachments: answer.attachments,
-    mentions: answer.mentions
+    mentions: answer.mentions,
+    mentionIds: answer.mentionIds
   };
 }
 
@@ -526,10 +535,19 @@ export const firebaseContentAdapter: ContentAdapter = {
       content: comment.content,
       parentCommentId: comment.parentCommentId,
       mentions: comment.mentions,
+      mentionIds: comment.mentionIds,
       createdAtMs: Date.now()
     });
     await setDoc(reference, payload);
     return toComment(payload, reference.id);
+  },
+
+  async updateComment(doubtId: string, commentId: string, patch: CommentUpdate): Promise<CommentRecord> {
+    const reference = doc(commentsCollection(doubtId), commentId);
+    await updateDoc(reference, { ...patch, updatedAtMs: Date.now() });
+    const snapshot = await getDoc(reference);
+    if (!snapshot.exists()) throw notFound();
+    return toComment(snapshot.data(), snapshot.id);
   },
 
   async deleteComment(doubtId: string, commentId: string): Promise<void> {
@@ -724,6 +742,14 @@ export const firebaseContentAdapter: ContentAdapter = {
     const payload = compact({
       id: reference.id,
       userId: notification.userId,
+      // Identity of the event's originator. The rules pin this to
+      // `request.auth.uid`, so an omitted or forged sender is refused rather
+      // than stored.
+      senderId: notification.senderId,
+      // This adapter only ever runs in a browser: `server` is reserved for a
+      // future Cloud Function writing through the Admin SDK (which the rules
+      // do not evaluate).
+      source: 'client' as const,
       type: notification.type,
       title: notification.title,
       message: notification.message,

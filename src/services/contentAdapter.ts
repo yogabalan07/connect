@@ -42,6 +42,7 @@ export const DOUBT_CONTENT_KEYS = [
   'codeSnippet',
   'attachments',
   'mentions',
+  'mentionIds',
   'updatedAtMs'
 ] as const;
 
@@ -59,6 +60,7 @@ export type DoubtContentPatch = Partial<
     | 'codeSnippet'
     | 'attachments'
     | 'mentions'
+    | 'mentionIds'
   >
 >;
 
@@ -74,7 +76,7 @@ export interface DoubtStatePatch {
 }
 
 export type AnswerContentPatch = Partial<
-  Pick<Answer, 'content' | 'codeSnippet' | 'attachments' | 'mentions'>
+  Pick<Answer, 'content' | 'codeSnippet' | 'attachments' | 'mentions' | 'mentionIds'>
 >;
 
 export interface AnswerStatePatch {
@@ -93,6 +95,18 @@ export interface CommentRecord extends Comment {
   doubtId: string;
   /** `''` for a doubt-level comment, otherwise the owning answer's id. */
   answerId: string;
+}
+
+/**
+ * Everything an edit may touch on a comment.
+ *
+ * Deliberately just the body: the mention handles are resolved when the
+ * comment is first posted, so a later edit cannot quietly re-address a
+ * notification at someone else. `firestore.rules` pins the writable set to
+ * `content` + `updatedAtMs` for the same reason.
+ */
+export interface CommentUpdate {
+  content: string;
 }
 
 /** A vote write: the caller's own `votes/…` document plus the parent counters. */
@@ -148,6 +162,8 @@ export interface ContentAdapter {
   /** Every comment on a doubt (both doubt-level and per-answer). */
   listComments(doubtId: string): Promise<CommentRecord[]>;
   createComment(doubtId: string, answerId: string | null, comment: Comment): Promise<CommentRecord>;
+  /** Edits the body of an existing comment. Ownership is decided by the rules. */
+  updateComment(doubtId: string, commentId: string, patch: CommentUpdate): Promise<CommentRecord>;
   deleteComment(doubtId: string, commentId: string): Promise<void>;
 
   // ------------------------------------------------------------------- Votes

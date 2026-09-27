@@ -32,9 +32,35 @@ import { CodeBlock } from '../../components/doubts/CodeBlock';
 import { ReportModal } from '../../components/modals/ReportModal';
 import { ShareModal } from '../../components/modals/ShareModal';
 import { canViewDoubt } from '../../services/doubtService';
-import { canEditAnswer, useAnswersStore } from '../../services/answerService';
+import {
+  canDeleteComment,
+  canEditAnswer,
+  canEditComment,
+  useAnswersStore
+} from '../../services/answerService';
 import { useDoubts } from '../../hooks/useDoubts';
-import { Answer } from '../../types';
+import { Answer, Comment } from '../../types';
+
+/** Matches `@handle` in rendered copy, mirroring `utils/mentions.ts`. */
+const MENTION_RENDER = /@([A-Za-z0-9_]{2,32})/g;
+
+/** Highlights @handles so a mention reads as a mention, not as plain text. */
+const MentionText: React.FC<{ text: string }> = ({ text }) => {
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(MENTION_RENDER)) {
+    const start = match.index ?? 0;
+    if (start > last) parts.push(text.slice(last, start));
+    parts.push(
+      <span key={`${start}-${match[1]}`} className="font-semibold text-indigo-300">
+        @{match[1]}
+      </span>
+    );
+    last = start + match[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return <>{parts}</>;
+};
 
 export const DoubtDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -49,7 +75,11 @@ export const DoubtDetailPage: React.FC = () => {
     toggleVoteAnswer,
     toggleBookmark,
     bookmarkedDoubtIds,
+    getDoubtComments,
+    addCommentToDoubt,
     addCommentToAnswer,
+    updateComment,
+    deleteComment,
     updateAnswer,
     deleteAnswer,
     currentUser,
@@ -59,6 +89,7 @@ export const DoubtDetailPage: React.FC = () => {
 
   const doubt = id ? getDoubtById(id) : undefined;
   const answers = id ? getAnswersForDoubt(id) : [];
+  const doubtComments = id ? getDoubtComments(id) : [];
 
   // Store lifecycle for this doubt's answers (skeleton / retry copy).
   const { status: answersStatus } = useAnswersStore();
@@ -74,6 +105,14 @@ export const DoubtDetailPage: React.FC = () => {
   // Comment input per answer
   const [commentInputs, setCommentInputs] = useState<{ [answerId: string]: string }>({});
   const [activeCommentBox, setActiveCommentBox] = useState<string | null>(null);
+
+  // Doubt-level clarification thread (one box, keyed by the question itself)
+  const [showDoubtCommentBox, setShowDoubtCommentBox] = useState(false);
+  const [doubtCommentText, setDoubtCommentText] = useState('');
+
+  // Inline comment editing, shared by the question and answer threads
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editCommentText, setEditCommentText] = useState('');
 
   // Modals
   const [showReport, setShowReport] = useState(false);
@@ -199,6 +238,107 @@ export const DoubtDetailPage: React.FC = () => {
     void addCommentToAnswer(answerId, text.trim());
     setCommentInputs(prev => ({ ...prev, [answerId]: '' }));
     setActiveCommentBox(null);
+  };
+
+  const handleDoubtCommentSubmit = () => {
+    const text = doubtCommentText;
+    if (!text.trim()) return;
+    void addCommentToDoubt(doubt.id, text.trim());
+    setDoubtCommentText('');
+    setShowDoubtCommentBox(false);
+  };
+
+  const startEditComment = (comment: Comment) => {
+    setEditingCommentId(comment.id);
+    setEditCommentText(comment.content);
+  };
+
+  const saveEditComment = () => {
+    if (!editingCommentId || !editCommentText.trim()) return;
+    void updateComment(editingCommentId, editCommentText.trim());
+    setEditingCommentId(null);
+  };
+
+  const removeComment = (comment: Comment) => {
+    if (!window.confirm('Delete this comment? This cannot be undone.')) return;
+    void deleteComment(comment.id);
+  };
+
+  /**
+   * One comment row, used by the question thread and every answer thread.
+   * Both edit and delete are author-or-admin, matching the rules.
+   */
+  const renderComment = (comment: Comment) => {
+    const editing = editingCommentId === comment.id;
+    return (
+      <div
+        key={comment.id}
+        className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/60 text-xs text-slate-300"
+      >
+        <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1 gap-2">
+          <span className="font-semibold text-slate-200">{comment.authorName}</span>
+          <span className="flex items-center gap-2 shrink-0">
+            <span>{comment.updatedAt ? `edited ${comment.updatedAt}` : comment.createdAt}</span>
+            {canEditComment(comment, currentUser) && (
+              <button
+                type="button"
+                onClick={() => startEditComment(comment)}
+                className="text-slate-500 hover:text-indigo-400 transition-colors"
+                title="Edit comment"
+              >
+                <Pencil className="w-3 h-3" />
+              </button>
+            )}
+            {canDeleteComment(comment, currentUser) && (
+              <button
+                type="button"
+                onClick={() => removeComment(comment)}
+                className="text-slate-500 hover:text-rose-400 transition-colors"
+                title="Delete comment"
+              >
+                <Trash2 className="w-3 h-3" />
+              </button>
+            )}
+          </span>
+        </div>
+
+        {editing ? (
+          <div className="space-y-2">
+            <input
+              type="text"
+              value={editCommentText}
+              onChange={e => setEditCommentText(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') saveEditComment();
+                if (e.key === 'Escape') setEditingCommentId(null);
+              }}
+              autoFocus
+              className="w-full px-3 py-1.5 rounded-xl bg-slate-900 border border-slate-700 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingCommentId(null)}
+                className="px-3 py-1 rounded-lg text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveEditComment}
+                className="px-3 py-1 rounded-lg text-[11px] font-semibold bg-indigo-600 hover:bg-indigo-500 text-white"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        ) : (
+          <p className="text-slate-300">
+            <MentionText text={comment.content} />
+          </p>
+        )}
+      </div>
+    );
   };
 
   const handleAnswerSubmit = async (e: React.FormEvent) => {
@@ -463,6 +603,55 @@ export const DoubtDetailPage: React.FC = () => {
         </div>
       </article>
 
+      {/* Question-level clarification thread */}
+      <section className="rounded-3xl bg-slate-900/60 border border-slate-800 p-4 sm:p-5 space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-[10px] sm:text-xs font-semibold text-slate-400 uppercase tracking-wider">
+            Clarifications on this question ({doubtComments.length})
+          </h2>
+          <button
+            type="button"
+            onClick={() => setShowDoubtCommentBox(open => !open)}
+            className="text-xs text-indigo-400 hover:underline flex items-center gap-1 shrink-0"
+          >
+            <MessageSquare className="w-3.5 h-3.5" />
+            <span>{showDoubtCommentBox ? 'Close' : 'Add clarification'}</span>
+          </button>
+        </div>
+
+        {doubtComments.length > 0 ? (
+          <div className="space-y-2">{doubtComments.map(renderComment)}</div>
+        ) : (
+          <p className="text-xs text-slate-500">
+            Nothing here yet. Use this thread to ask the author for detail before a solution is
+            written.
+          </p>
+        )}
+
+        {showDoubtCommentBox && (
+          <div className="flex items-center gap-2 pt-1">
+            <input
+              type="text"
+              value={doubtCommentText}
+              onChange={e => setDoubtCommentText(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') handleDoubtCommentSubmit();
+              }}
+              placeholder="Ask a concise clarification on the question..."
+              autoFocus
+              className="flex-1 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+            <button
+              type="button"
+              onClick={handleDoubtCommentSubmit}
+              className="px-3 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"
+            >
+              Send
+            </button>
+          </div>
+        )}
+      </section>
+
       {/* Answers Section */}
       <section className="space-y-4">
         <div className="flex items-center justify-between">
@@ -693,18 +882,7 @@ export const DoubtDetailPage: React.FC = () => {
                           <span className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block">
                             Clarification Comments ({ans.comments.length})
                           </span>
-                          {ans.comments.map(c => (
-                            <div
-                              key={c.id}
-                              className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/60 text-xs text-slate-300"
-                            >
-                              <div className="flex items-center justify-between text-[11px] text-slate-400 mb-1">
-                                <span className="font-semibold text-slate-200">{c.authorName}</span>
-                                <span>{c.createdAt}</span>
-                              </div>
-                              <p className="text-slate-300">{c.content}</p>
-                            </div>
-                          ))}
+                          {ans.comments.map(renderComment)}
                         </div>
                       )}
 
@@ -847,7 +1025,7 @@ export const DoubtDetailPage: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => insertMarkdown('@Arun ')}
+                  onClick={() => insertMarkdown('@')}
                   className="p-1.5 rounded hover:bg-slate-800 hover:text-white"
                   title="Tag User"
                 >
