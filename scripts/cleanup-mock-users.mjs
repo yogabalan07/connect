@@ -7,10 +7,14 @@
  * accounts are keyed by a Firebase Auth uid (28+ random characters), so a
  * pattern match can never hit a genuine member.
  *
+ * Runs through the official `firebase-admin` SDK (GOOGLE_APPLICATION_CREDENTIALS);
+ * the hand-rolled OAuth/REST client has been removed.
+ *
  * Safety rails (all of them are hard stops, not warnings):
  *   - dry-run by default: nothing is deleted without `--apply`;
  *   - the administrator account (ADMIN_EMAIL) is never deleted;
  *   - a document with `role: 'admin'` is never deleted;
+ *   - a document that disappeared between the scan and the delete is skipped;
  *   - anything not matching the mock pattern is reported but left alone,
  *     unless it is named explicitly with `--ids` / `--emails`.
  *
@@ -19,17 +23,14 @@
  *   npm run admin:cleanup-mock -- --apply  # delete what was reported
  *   npm run admin:cleanup-mock -- --ids user-1,user-7 --apply
  */
-import {
-  documentData,
-  getAccessToken,
-  getFirebaseConfig,
-  listCollection,
-  loadLocalEnv,
-  loadServiceAccount,
-  userDocumentUrl,
-  usersCollectionUrl,
-  api
-} from './lib/adminApi.mjs';
+import { describeError, initFirebaseAdmin, loadLocalEnv } from './lib/env.mjs';
+
+/** Task 11: operation + Firebase error code + concise message, never secrets. */
+function failOperation(operation, error) {
+  console.error(`\n[cleanup-mock] bootstrap failed`);
+  console.error(`  ${describeError(error, { operation }).split('\n').join('\n  ')}`);
+  process.exit(1);
+}
 
 const MOCK_ID = /^user-\d+$/;
 
@@ -71,20 +72,40 @@ function classify(docId, data, adminEmail, explicit) {
 
 async function main() {
   const env = loadLocalEnv();
-  const { projectId } = getFirebaseConfig(env);
   const adminEmail = (env.ADMIN_EMAIL ?? '').trim().toLowerCase() || null;
-  const serviceAccount = loadServiceAccount(env);
-  const token = await getAccessToken(serviceAccount);
 
-  const documents = await listCollection(usersCollectionUrl(projectId), token);
-  console.log(`[cleanup-mock] project: ${projectId}`);
+  let db;
+  let projectId;
+  let databaseId;
+  try {
+    ({ db, projectId, databaseId } = initFirebaseAdmin(env));
+  } catch (error) {
+    failOperation('initializing Firebase Admin from GOOGLE_APPLICATION_CREDENTIALS', error);
+  }
+
+  console.log(`[cleanup-mock] project:  ${projectId}`);
+  console.log(`[cleanup-mock] database: ${databaseId}`);
+
+  let snapshot;
+  try {
+    snapshot = await db.collection('users').get();
+  } catch (error) {
+    failOperation('listing the users collection', error);
+  }
+  const documents = snapshot.docs;
   console.log(`[cleanup-mock] scanned ${documents.length} document(s) in users/\n`);
 
   const rows = documents.map(document => {
-    const id = document.name.split('/').pop();
-    const data = documentData(document);
-    const verdict = classify(id, data, adminEmail, args);
-    return { id, email: data.email ?? '(no email)', role: data.role ?? '?', status: data.status ?? '?', ...verdict };
+    const data = document.data() ?? {};
+    const verdict = classify(document.id, data, adminEmail, args);
+    return {
+      id: document.id,
+      ref: document.ref,
+      email: data.email ?? '(no email)',
+      role: data.role ?? '?',
+      status: data.status ?? '?',
+      ...verdict
+    };
   });
 
   const width = Math.max(8, ...rows.map(row => row.id.length));
@@ -103,16 +124,21 @@ async function main() {
   }
 
   for (const row of doomed) {
-    await api(`${userDocumentUrl(projectId, row.id)}?currentDocument.exists=users/${encodeURIComponent(row.id)}`, {
-      method: 'DELETE',
-      token
-    });
+    // Re-check existence immediately before deleting so a document created or
+    // removed after the scan can never be clobbered.
+    try {
+      const current = await row.ref.get();
+      if (!current.exists) {
+        console.log(`[cleanup-mock] skipped users/${row.id} (already gone)`);
+        continue;
+      }
+      await row.ref.delete();
+    } catch (error) {
+      failOperation(`deleting users/${row.id}`, error);
+    }
     console.log(`[cleanup-mock] deleted users/${row.id}`);
   }
   console.log(`[cleanup-mock] removed ${doomed.length} document(s).`);
 }
 
-main().catch(error => {
-  console.error(`\n[cleanup-mock] ${error.message}`);
-  process.exit(1);
-});
+main().catch(error => failOperation('running the cleanup script', error));

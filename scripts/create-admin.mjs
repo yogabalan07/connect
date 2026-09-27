@@ -1,49 +1,55 @@
 #!/usr/bin/env node
 /**
- * One-time bootstrap of the department administrator account.
+ * Idempotent bootstrap of the department administrator account.
  *
- *   1. ensures the Firebase Auth account exists for the administrator's email
- *      (created with the password you supply, never stored by this script),
- *   2. writes `users/{uid}` with `role: 'admin'` and `status: 'approved'`.
+ * Implemented with the official `firebase-admin` Node.js SDK — the previous
+ * hand-rolled OAuth JWT + Identity Toolkit REST client has been removed
+ * entirely, so there is only one admin-auth implementation.
  *
- * This is deliberately NOT client-side: the web app can only ever create a
- * `role: 'student'`, `status: 'pending'` profile for its own uid (enforced by
- * `firestore.rules`), so an admin document has to be provisioned from here,
- * with privileged credentials, once.
+ * Credential source: GOOGLE_APPLICATION_CREDENTIALS (service-account JSON,
+ * kept outside the repository). `firebase-admin` is imported only by scripts,
+ * never by `src/`, so neither the key nor the password can reach the browser
+ * bundle.
+ *
+ * Flow:
+ *   1. read ADMIN_EMAIL (and ADMIN_PASSWORD only when it is actually needed),
+ *   2. initializeApp() + getAuth() + getFirestore(),
+ *   3. getAuth().getUserByEmail(ADMIN_EMAIL)
+ *        exists   -> reuse it (never create a second account); update the
+ *                    password with updateUser() only when one is configured,
+ *        missing  -> createUser({ email, password, emailVerified: true }),
+ *   4. write `users/{uid}` with the required admin fields; if the document
+ *      already exists, update only those fields (never a duplicate create),
+ *   5. read `users/{uid}` back and verify id / role / status / email.
  *
  * Usage:
- *   $env:ADMIN_EMAIL='...'; $env:ADMIN_PASSWORD='...'; npm run admin:create
- *   (or omit ADMIN_PASSWORD and type it at the prompt)
+ *   $env:GOOGLE_APPLICATION_CREDENTIALS='<path to service-account JSON>'
+ *   npm run admin:create
  *
- * Credentials come from GOOGLE_APPLICATION_CREDENTIALS / FIREBASE_SERVICE_ACCOUNT
- * at run time. Nothing here is ever logged, committed or written to disk.
+ * The password is never printed, never stored in Firestore, and every error
+ * report is reduced to operation + Firebase error code + message.
  */
-import {
-  createAccount,
-  documentData,
-  getAccessToken,
-  getFirebaseConfig,
-  loadLocalEnv,
-  loadServiceAccount,
-  lookupAccount,
-  readSecret,
-  setPassword,
-  toValue,
-  userDocumentUrl,
-  usersCollectionUrl,
-  api
-} from './lib/adminApi.mjs';
+import { FieldValue } from 'firebase-admin/firestore';
+import { describeError, initFirebaseAdmin, loadLocalEnv, readSecret } from './lib/env.mjs';
+
+/** Everything the failure reporter needs; secrets are scrubbed before print. */
+const reportContext = { projectId: undefined, databaseId: undefined, secrets: [] };
 
 function fail(message) {
   console.error(`\n[create-admin] ${message}`);
   process.exit(1);
 }
 
-const fieldsOf = data => Object.fromEntries(Object.entries(data).map(([key, value]) => [key, toValue(value)]));
+/** Task 11: operation + Firebase error code + concise message, never secrets. */
+function failOperation(operation, error) {
+  const detail = describeError(error, { operation, ...reportContext }, reportContext.secrets);
+  console.error(`\n[create-admin] bootstrap failed`);
+  console.error(`  ${detail.split('\n').join('\n  ')}`);
+  process.exit(1);
+}
 
 async function main() {
   const env = loadLocalEnv();
-  const { projectId, apiKey } = getFirebaseConfig(env);
 
   const email = (env.ADMIN_EMAIL ?? '').trim().toLowerCase();
   if (!email) {
@@ -54,95 +60,169 @@ async function main() {
     );
   }
 
-  const password = await readSecret('ADMIN_PASSWORD');
-  if (!password || password.length < 6) {
-    fail('ADMIN_PASSWORD must be at least 6 characters.');
+  let auth;
+  let db;
+  try {
+    ({ auth, db, projectId: reportContext.projectId, databaseId: reportContext.databaseId } =
+      initFirebaseAdmin(env));
+  } catch (error) {
+    failOperation('initializing Firebase Admin from GOOGLE_APPLICATION_CREDENTIALS', error);
   }
 
-  const serviceAccount = loadServiceAccount(env);
-  const token = await getAccessToken(serviceAccount);
-  console.log(`[create-admin] project: ${projectId}`);
-  console.log(`[create-admin] admin:   ${email}`);
+  console.log(`[create-admin] project:  ${reportContext.projectId}`);
+  console.log(`[create-admin] database: ${reportContext.databaseId}`);
+  console.log(`[create-admin] admin:    ${email}`);
 
   // ---------------------------------------------------------- Auth account
-  let uid = await lookupAccount(projectId, email, token);
-  if (uid) {
-    console.log(`[create-admin] Firebase Auth account already exists (${uid}).`);
-    try {
-      await setPassword(projectId, uid, password, token);
-      console.log('[create-admin] password set for the existing account.');
-    } catch (error) {
-      console.warn(
-        `[create-admin] warning: could not set the password (${error.message}).\n` +
-          '               Set it in Firebase console > Authentication > Users.'
+  let account;
+  try {
+    account = await auth.getUserByEmail(email);
+  } catch (error) {
+    if (error?.code === 'auth/user-not-found') account = null;
+    else failOperation(`looking up the Auth account for ${email}`, error);
+  }
+
+  let uid;
+  let accountAction;
+  if (account) {
+    // NEVER create a second account: reuse the existing one and its uid.
+    uid = account.uid;
+    accountAction = 'reused';
+    console.log(`[create-admin] Auth account: reused existing account (${uid}) - no new account created`);
+
+    // Update the password only when one is configured ("only if needed").
+    const patch = {};
+    const password = env.ADMIN_PASSWORD;
+    if (password) patch.password = password;
+    if (account.emailVerified !== true) patch.emailVerified = true;
+
+    if (Object.keys(patch).length === 0) {
+      console.log('[create-admin] Auth password: ADMIN_PASSWORD not provided - existing password kept');
+    } else {
+      reportContext.secrets = password ? [password] : [];
+      try {
+        await auth.updateUser(uid, patch);
+      } catch (error) {
+        failOperation(`updating the existing Auth account ${uid}`, error);
+      }
+      console.log(
+        `[create-admin] Auth ${patch.password ? 'password updated' : 'email verified'}` +
+          `${patch.password && patch.emailVerified ? ' and email verified' : ''} on the existing account`
       );
     }
   } else {
-    if (!apiKey) {
-      fail('VITE_FIREBASE_API_KEY is missing from .env.local (needed to create the Auth account).');
+    // Creating is the only case where the password is mandatory.
+    const password = await readSecret('ADMIN_PASSWORD', env);
+    if (!password || password.length < 6) fail('ADMIN_PASSWORD must be at least 6 characters.');
+    reportContext.secrets = [password];
+
+    try {
+      const created = await auth.createUser({ email, password, emailVerified: true });
+      uid = created.uid;
+    } catch (error) {
+      failOperation(`creating the Auth account for ${email}`, error);
     }
-    uid = await createAccount(apiKey, email, password);
-    console.log(`[create-admin] created Firebase Auth account ${uid}.`);
+    accountAction = 'created';
+    console.log(`[create-admin] Auth account: created (${uid})`);
   }
 
   // ------------------------------------------------------- profile document
-  const now = new Date().toISOString();
-  const url = userDocumentUrl(projectId, uid);
+  const displayName = (env.ADMIN_NAME ?? '').trim() || 'Department Administrator';
+  const username = (env.ADMIN_USERNAME ?? '').trim() || 'department_admin';
 
-  let existing = null;
+  const usersRef = db.collection('users').doc(uid);
+  let snapshot;
   try {
-    existing = await api(url, { token });
+    snapshot = await usersRef.get();
   } catch (error) {
-    if (error.status !== 404) throw error;
+    failOperation(`reading users/${uid}`, error);
   }
 
-  if (!existing) {
-    const profile = {
+  let profileAction;
+  if (!snapshot.exists) {
+    try {
+      await usersRef.set({
+        id: uid,
+        email,
+        name: displayName,
+        displayName,
+        username,
+        role: 'admin',
+        status: 'approved',
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp()
+      });
+    } catch (error) {
+      failOperation(`creating users/${uid}`, error);
+    }
+    profileAction = 'created';
+    console.log(`[create-admin] Profile: created users/${uid} (role=admin, status=approved)`);
+  } else {
+    const existing = snapshot.data() ?? {};
+    const patch = {
       id: uid,
       email,
-      displayName: env.ADMIN_NAME || 'Department Administrator',
-      username: env.ADMIN_USERNAME || 'department_admin',
+      name: displayName,
+      displayName,
+      username,
       role: 'admin',
       status: 'approved',
-      department: env.ADMIN_DEPARTMENT || 'CSE',
-      year: env.ADMIN_YEAR || 'Faculty',
-      bio: env.ADMIN_BIO || 'Department administrator responsible for approving campus accounts.',
-      createdAt: now,
-      updatedAt: now
+      updatedAt: FieldValue.serverTimestamp()
     };
-    await api(`${usersCollectionUrl(projectId)}?documentId=${encodeURIComponent(uid)}`, {
-      method: 'POST',
-      token,
-      body: { fields: fieldsOf(profile) }
-    });
-    console.log(`[create-admin] created users/${uid} with role=admin, status=approved.`);
-  } else {
-    const patch = { role: 'admin', status: 'approved', email, updatedAt: now };
-    const mask = Object.keys(patch).join(',');
-    await api(`${url}?updateMask=${encodeURIComponent(mask)}`, {
-      method: 'PATCH',
-      token,
-      body: { fields: fieldsOf(patch) }
-    });
-    console.log(`[create-admin] updated users/${uid}: role=admin, status=approved.`);
+    if (existing.createdAt === undefined) patch.createdAt = FieldValue.serverTimestamp();
+    try {
+      await usersRef.update(patch);
+    } catch (error) {
+      failOperation(`updating users/${uid}`, error);
+    }
+    profileAction = 'updated';
+    console.log(
+      `[create-admin] Profile: updated existing users/${uid} (only required admin fields; no duplicate created)`
+    );
   }
 
   // ------------------------------------------------------------- verification
-  const saved = documentData(await api(url, { token }));
-  if (saved.role !== 'admin' || saved.status !== 'approved' || saved.id !== uid) {
-    fail(`verification failed: ${JSON.stringify({ id: saved.id, role: saved.role, status: saved.status })}`);
+  let saved;
+  try {
+    saved = await usersRef.get();
+  } catch (error) {
+    failOperation(`reading back users/${uid}`, error);
   }
 
-  console.log('[create-admin] verified document:');
+  const data = saved.exists ? saved.data() : undefined;
+  const problems = [];
+  if (!saved.exists) problems.push('document does not exist');
+  else {
+    if (data.id !== uid) problems.push(`id ${JSON.stringify(data.id)} does not equal Auth uid ${uid}`);
+    if (data.role !== 'admin') problems.push(`role is ${JSON.stringify(data.role)}, expected "admin"`);
+    if (data.status !== 'approved') problems.push(`status is ${JSON.stringify(data.status)}, expected "approved"`);
+    if (data.email !== email) problems.push(`email ${JSON.stringify(data.email)} does not match ADMIN_EMAIL`);
+  }
+  if (problems.length) {
+    console.error(`\n[create-admin] Verification: FAILED for users/${uid}`);
+    for (const problem of problems) console.error(`  - ${problem}`);
+    process.exit(1);
+  }
+
+  console.log(`[create-admin] Verification: succeeded for users/${uid}`);
   console.log(
     JSON.stringify(
-      { id: saved.id, email: saved.email, displayName: saved.displayName, role: saved.role, status: saved.status },
+      {
+        id: data.id,
+        email: data.email,
+        name: data.name,
+        username: data.username,
+        role: data.role,
+        status: data.status
+      },
       null,
       2
     )
   );
-  console.log('[create-admin] done. Deploy the rules next: firebase deploy --only firestore:rules');
-  console.log('[create-admin] the password was used for the Auth account only - it is not stored anywhere here.');
+  console.log(
+    `[create-admin] summary: account=${accountAction} profile=${profileAction} verification=passed`
+  );
+  console.log('[create-admin] The password was used for the Auth account only - it is not stored anywhere.');
 }
 
-main().catch(error => fail(error.message));
+main().catch(error => failOperation('running the bootstrap script', error));
