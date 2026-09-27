@@ -40,6 +40,13 @@ const activeAdmin: AuthSnapshot = {
   status: 'approved',
   role: 'admin'
 };
+/** Authenticated identity whose `users/{uid}` profile has not resolved yet. */
+const authenticatedWithoutProfile: AuthSnapshot = {
+  isLoading: false,
+  isAuthenticated: true,
+  status: null,
+  role: null
+};
 
 describe('resolveAppAccess (/app/*)', () => {
   it('waits while the session is loading', () => {
@@ -62,6 +69,15 @@ describe('resolveAppAccess (/app/*)', () => {
   it('allows active users', () => {
     expect(resolveAppAccess(activeStudent)).toEqual({ type: 'allow' });
   });
+
+  it('never reports a permission error: an unresolved profile is a /login redirect', () => {
+    // Regression: a failed or not-yet-finished `users/{uid}` read must look
+    // like "not ready", never like a Firestore `permission-denied`.
+    expect(resolveAppAccess(authenticatedWithoutProfile)).toEqual({
+      type: 'redirect',
+      to: '/login'
+    });
+  });
 });
 
 describe('resolveAdminAccess (/admin/*)', () => {
@@ -71,6 +87,23 @@ describe('resolveAdminAccess (/admin/*)', () => {
 
   it('allows active admins', () => {
     expect(resolveAdminAccess(activeAdmin)).toEqual({ type: 'allow' });
+  });
+
+  it('waits for the profile instead of declaring an admin unauthorized', () => {
+    expect(resolveAdminAccess(loading)).toEqual({ type: 'loading' });
+  });
+
+  it('sends an unresolved profile to /login, not to /forbidden', () => {
+    expect(resolveAdminAccess(authenticatedWithoutProfile)).toEqual({
+      type: 'redirect',
+      to: '/login'
+    });
+  });
+
+  it('routes the admin account (role=admin, status=approved) into the dashboard', () => {
+    expect(resolveAdminAccess(activeAdmin)).toEqual({ type: 'allow' });
+    expect(resolveAppAccess(activeAdmin)).toEqual({ type: 'allow' });
+    expect(resolveGuestAccess(activeAdmin)).toEqual({ type: 'redirect', to: '/app' });
   });
 
   it('keeps status gating ahead of role gating', () => {

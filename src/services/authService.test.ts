@@ -8,6 +8,8 @@ import type { AuthAdapter, AuthStateListener, AuthUser } from './authAdapter';
 import { setUserAdapter } from './userAdapter';
 import { createFakeUserAdapter } from './testing/fakeUserAdapter';
 import type { FakeUserAdapter } from './testing/fakeUserAdapter';
+import type { User } from '../types';
+import { ServiceError } from '../lib/errors';
 
 /**
  * Drains the promise queue so fire-and-forget profile restores finish.
@@ -151,6 +153,31 @@ const baseRegistration = {
 const makeRegistration = (overrides: Partial<Record<string, unknown>> = {}) => ({
   ...baseRegistration,
   email: randomEmail(),
+  ...overrides
+});
+
+/** A stored `users/{uid}` document exactly as Firestore holds it. */
+const storedProfile = (uid: string, overrides: Partial<User> = {}): User => ({
+  id: uid,
+  name: 'Department Administrator',
+  username: 'department_admin',
+  email: 'admin@college.edu',
+  avatar: '',
+  department: 'CSE',
+  year: '2nd',
+  section: 'A',
+  bio: '',
+  skills: [],
+  role: 'admin',
+  status: 'approved',
+  reputation: 0,
+  questionsCount: 0,
+  answersCount: 0,
+  acceptedCount: 0,
+  followersCount: 0,
+  followingCount: 0,
+  joinedDate: 'Just now',
+  badges: [],
   ...overrides
 });
 
@@ -318,6 +345,59 @@ describe('authService.signIn', () => {
 
     expect(authService.getSessionUid()).toBe('uid_without_email');
     expect(authService.getCurrentUser()).toBeNull();
+  });
+
+  it('restores an approved admin profile without recreating or downgrading it', async () => {
+    const identity = fake.seed('admin@college.edu', 'correct horse battery');
+    fakeUsers.seed([storedProfile(identity.uid)]);
+
+    const result = await authService.signIn('admin@college.edu', 'correct horse battery');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    const profile = authService.getCurrentUser();
+    expect(profile?.id).toBe(identity.uid);
+    expect(profile?.role).toBe('admin');
+    expect(profile?.status).toBe('approved');
+    // The document already existed: auth restoration must never write to it,
+    // otherwise a login could silently reset an admin to student/pending.
+    expect(fakeUsers.calls.createUserProfile).toBe(0);
+    expect(fakeUsers.calls.updateUserProfile).toBe(0);
+  });
+
+  it('fails the session closed when Firestore rules deny the profile read', async () => {
+    fake.seed('denied@college.edu', 'correct horse battery');
+    fakeUsers.getUserProfile = async () => {
+      throw { code: 'permission-denied' };
+    };
+
+    const result = await authService.signIn('denied@college.edu', 'correct horse battery');
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toBe(
+      'You do not have permission to do that. Contact your department administrator.'
+    );
+    expect(authService.getSessionUid()).toBeNull();
+    expect(authService.getCurrentUser()).toBeNull();
+    expect(authService.isLoading()).toBe(false);
+  });
+
+  it('reports a missing profile differently from a rules denial', async () => {
+    fake.seed('no_profile@college.edu', 'correct horse battery');
+    fakeUsers.getUserProfile = async () => null;
+    fakeUsers.createUserProfile = async () => {
+      throw new ServiceError('user/id-taken', 'That account already exists.');
+    };
+
+    const result = await authService.signIn('no_profile@college.edu', 'correct horse battery');
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.message).toBe(
+      'Your account profile could not be loaded. Contact your department administrator.'
+    );
+    expect(result.message).not.toContain('permission');
   });
 });
 
