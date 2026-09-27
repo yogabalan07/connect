@@ -2,13 +2,15 @@
  * Service barrel + bootstrapping.
  *
  * UI  ->  hooks/context  ->  services  ->  adapters (Firebase Authentication
- * and Firestore; tests inject in-memory doubles through `setAuthAdapter` /
- * `setUserAdapter`).
+ * and Firestore; tests inject in-memory doubles through `setAuthAdapter`,
+ * `setUserAdapter` / `setContentAdapter`).
  *
- * `bootstrapServices` starts each store's first read. Stores render
- * skeletons while that read is in flight and an adapter failure is captured
- * as a typed store status instead of an exception.
+ * `bootstrapServices` puts every store into `loading`; `loadContent` starts
+ * the actual reads once a session exists (the Firestore rules only let
+ * signed-in, approved members read content, so an anonymous boot must not
+ * issue a request that is guaranteed to come back `permission-denied`).
  */
+import { setServiceActor } from './actor';
 import { userService } from './userService';
 import { doubtService } from './doubtService';
 import { answerService } from './answerService';
@@ -34,6 +36,41 @@ export function bootstrapServices(): void {
   catalogService.bootstrap();
   adminService.bootstrap();
   reportService.bootstrap();
+}
+
+/**
+ * First content read for this session: doubts, catalogue, bookmarks/follows
+ * and notifications, in parallel. Every store keeps `loading` until its own
+ * adapter answers, so pages render skeletons instead of an empty feed.
+ */
+export async function loadContent(uid: string): Promise<void> {
+  setServiceActor(uid);
+  await Promise.all([
+    doubtService.loadAll(uid),
+    catalogService.loadAll(),
+    socialService.loadAll(uid),
+    notificationService.loadAll(uid)
+  ]);
+}
+
+/** Drops the acting identity and returns every content store to `loading`. */
+export function unloadContent(): void {
+  setServiceActor(null);
+  doubtService.bootstrap();
+  answerService.bootstrap();
+  notificationService.bootstrap();
+  socialService.bootstrap();
+  catalogService.bootstrap();
+}
+
+/** Test seam: restores the pristine boot state across every content store. */
+export function resetContentServicesForTests(): void {
+  setServiceActor(null);
+  doubtService.bootstrap();
+  answerService.bootstrap();
+  notificationService.bootstrap();
+  socialService.bootstrap();
+  catalogService.bootstrap();
 }
 
 export {

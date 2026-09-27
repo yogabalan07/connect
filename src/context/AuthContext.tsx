@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo } fro
 import { User, UserRole, UserStatus } from '../types';
 import { useStore } from '../lib/store';
 import { authService, AuthResult, AuthSessionState, RegisterInput } from '../services/authService';
+import { loadContent, unloadContent } from '../services';
 import { useUsersStore, userService } from '../services/userService';
 import { toastStore } from '../lib/toastStore';
 import type { AuthSnapshot } from '../lib/routeAccess';
@@ -65,11 +66,16 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     authService.start();
   }, []);
 
-  // The directory is readable only while signed in (see `firestore.rules`);
-  // loading it here keeps anonymous boots from provoking a denied read.
+  // The directory and the doubt catalogue are readable only while signed in
+  // (see `firestore.rules`); loading them here keeps anonymous boots from
+  // provoking a denied read.
   useEffect(() => {
-    if (!session.uid) return;
+    if (!session.uid) {
+      unloadContent();
+      return;
+    }
     void userService.loadDirectory();
+    void loadContent(session.uid);
   }, [session.uid]);
 
   // A profile that cannot be resolved (read failure, or an identity without

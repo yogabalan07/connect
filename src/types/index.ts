@@ -115,6 +115,19 @@ export interface Doubt {
   isPinned?: boolean;
   userVote?: 'up' | 'down' | null;
   isBookmarked?: boolean;
+  /**
+   * Persisted bookkeeping (adapter-owned, never set by a form).
+   * Id of the answer created/deleted in the same atomic write as the last
+   * `answersCount` change — `firestore.rules` uses it to prove the counter
+   * only ever moves together with a real answer document.
+   */
+  lastAnswerId?: string | null;
+  /**
+   * Persisted bookkeeping: the accepted answer id, or null. `hasAcceptedAnswer`
+   * must always agree with it; the rules reject any doubt/answer pair that
+   * does not, which is how "one accepted answer per doubt" is enforced.
+   */
+  acceptedAnswerId?: string | null;
 }
 
 export interface Notification {

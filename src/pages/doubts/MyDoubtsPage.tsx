@@ -1,12 +1,25 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { HelpCircle, PlusCircle, Lock, CheckCircle2 } from 'lucide-react';
+import { HelpCircle, PlusCircle } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { useDoubts } from '../../hooks/useDoubts';
 import { DoubtCard } from '../../components/cards/DoubtCard';
 
 export const MyDoubtsPage: React.FC = () => {
-  const { doubts, currentUser } = useApp();
+  const { currentUser } = useApp();
+  const { doubts, status } = useDoubts();
   const [tab, setTab] = useState<'all' | 'public' | 'private' | 'solved' | 'unanswered'>('all');
+
+  if (status === 'loading') {
+    return (
+      <div className="space-y-4" role="status" aria-busy="true">
+        <div className="h-8 w-64 rounded bg-slate-800 animate-pulse" />
+        <div className="h-36 rounded-3xl bg-slate-900/60 border border-slate-800 animate-pulse" />
+        <div className="h-36 rounded-3xl bg-slate-900/60 border border-slate-800 animate-pulse" />
+        <span className="sr-only">Loading your doubts…</span>
+      </div>
+    );
+  }
 
   if (!currentUser) return null;
 

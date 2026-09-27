@@ -2,13 +2,30 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bookmark, Compass } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { useDoubts } from '../../hooks/useDoubts';
+import { useStore } from '../../lib/store';
+import { socialService } from '../../services/socialService';
 import { DoubtCard } from '../../components/cards/DoubtCard';
 
 export const BookmarksPage: React.FC = () => {
   const { doubts, bookmarkedDoubtIds } = useApp();
+  const { status: doubtsStatus } = useDoubts();
+  const social = useStore(socialService.store);
   const [filter, setFilter] = useState<'all' | 'solved' | 'unsolved'>('all');
 
   const savedDoubts = doubts.filter(d => bookmarkedDoubtIds.includes(d.id));
+  const loading = doubtsStatus === 'loading' || social.status === 'loading';
+
+  if (loading) {
+    return (
+      <div className="space-y-4" role="status" aria-busy="true">
+        <div className="h-8 w-56 rounded bg-slate-800 animate-pulse" />
+        <div className="h-36 rounded-3xl bg-slate-900/60 border border-slate-800 animate-pulse" />
+        <div className="h-36 rounded-3xl bg-slate-900/60 border border-slate-800 animate-pulse" />
+        <span className="sr-only">Loading saved doubts…</span>
+      </div>
+    );
+  }
 
   let filtered = savedDoubts;
   if (filter === 'solved') filtered = savedDoubts.filter(d => d.hasAcceptedAnswer);

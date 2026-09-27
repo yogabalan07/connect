@@ -27,11 +27,28 @@ export function useDoubts() {
     return (doubt: Doubt): boolean => canViewDoubt(doubt, currentUser);
   }, [currentUser]);
 
+  /**
+   * Records a detail-page visit. The Firestore rules allow at most `+1` per
+   * write, and a rejected view increment is swallowed by the service so it
+   * can never break the page.
+   */
+  const recordView = useMemo(() => {
+    return (doubtId: string): void => {
+      void doubtService.incrementViews(doubtId);
+    };
+  }, [state.doubts]);
+
   return {
     doubts,
     status: state.status,
+    error: state.error,
     getDoubtById,
-    canView
+    canView,
+    incrementViews: recordView,
+    /** Re-runs the first feed read (used by an error state's retry button). */
+    reload: () => {
+      if (currentUser) void doubtService.loadAll(currentUser.id);
+    }
   };
 }
 

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -32,7 +32,8 @@ import { CodeBlock } from '../../components/doubts/CodeBlock';
 import { ReportModal } from '../../components/modals/ReportModal';
 import { ShareModal } from '../../components/modals/ShareModal';
 import { canViewDoubt } from '../../services/doubtService';
-import { canEditAnswer } from '../../services/answerService';
+import { canEditAnswer, useAnswersStore } from '../../services/answerService';
+import { useDoubts } from '../../hooks/useDoubts';
 import { Answer } from '../../types';
 
 export const DoubtDetailPage: React.FC = () => {
@@ -41,6 +42,7 @@ export const DoubtDetailPage: React.FC = () => {
   const {
     getDoubtById,
     getAnswersForDoubt,
+    loadAnswersForDoubt,
     addAnswer,
     acceptAnswer,
     toggleVoteDoubt,
@@ -53,9 +55,13 @@ export const DoubtDetailPage: React.FC = () => {
     currentUser,
     users
   } = useApp();
+  const { status: doubtsStatus, incrementViews, reload } = useDoubts();
 
   const doubt = id ? getDoubtById(id) : undefined;
   const answers = id ? getAnswersForDoubt(id) : [];
+
+  // Store lifecycle for this doubt's answers (skeleton / retry copy).
+  const { status: answersStatus } = useAnswersStore();
 
   // Local editor state
   const [editorContent, setEditorContent] = useState('');
@@ -85,8 +91,49 @@ export const DoubtDetailPage: React.FC = () => {
   const [editAnswerText, setEditAnswerText] = useState('');
   const [editAnswerCode, setEditAnswerCode] = useState('');
 
+  // Declared before every early return so the hook order never changes.
+  useEffect(() => {
+    if (!id || !currentUser) return;
+    void loadAnswersForDoubt(id);
+  }, [id, currentUser, loadAnswersForDoubt]);
+
+  useEffect(() => {
+    if (!id || !doubt || doubtsStatus !== 'ready') return;
+    incrementViews(id);
+    // `doubt.id` is the identity that decides "a different doubt was opened";
+    // the surrounding object changes on every optimistic counter update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, doubt?.id, doubtsStatus]);
+
   // Guarded route: only rendered for a signed-in, active user.
   if (!currentUser) return null;
+
+  if (doubtsStatus === 'loading') {
+    return (
+      <div className="p-8 rounded-2xl bg-slate-900/60 border border-slate-800 space-y-4" role="status" aria-busy="true">
+        <div className="h-6 w-2/3 rounded bg-slate-800 animate-pulse" />
+        <div className="h-3 w-full rounded bg-slate-800/80 animate-pulse" />
+        <div className="h-3 w-5/6 rounded bg-slate-800/80 animate-pulse" />
+        <span className="sr-only">Loading question…</span>
+      </div>
+    );
+  }
+
+  if (doubtsStatus === 'error') {
+    return (
+      <div className="p-10 text-center rounded-2xl bg-slate-900/60 border border-rose-500/30 space-y-3" role="alert">
+        <h2 className="text-base font-bold text-white">We could not load this question</h2>
+        <p className="text-xs text-slate-400">Campus services are unreachable right now. Check your connection and try again.</p>
+        <button
+          type="button"
+          onClick={reload}
+          className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
 
   if (!doubt) {
     return (
@@ -133,11 +180,11 @@ export const DoubtDetailPage: React.FC = () => {
   }
 
   const handleVoteQuestion = (type: 'up' | 'down') => {
-    toggleVoteDoubt(doubt.id, type);
+    void toggleVoteDoubt(doubt.id, type);
   };
 
   const handleAcceptAnswer = (answerId: string) => {
-    acceptAnswer(doubt.id, answerId);
+    void acceptAnswer(doubt.id, answerId);
     // Subtle confetti trigger
     confetti({
       particleCount: 50,
@@ -149,33 +196,34 @@ export const DoubtDetailPage: React.FC = () => {
   const handleCommentSubmit = (answerId: string) => {
     const text = commentInputs[answerId];
     if (!text || !text.trim()) return;
-    addCommentToAnswer(answerId, text.trim());
+    void addCommentToAnswer(answerId, text.trim());
     setCommentInputs(prev => ({ ...prev, [answerId]: '' }));
     setActiveCommentBox(null);
   };
 
-  const handleAnswerSubmit = (e: React.FormEvent) => {
+  const handleAnswerSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editorContent.trim()) return;
     setIsSubmitting(true);
 
-    // The mock service validates and persists immediately; when Firebase
-    // lands, addAnswer becomes async and its failure is surfaced as a toast.
-    addAnswer(
-      doubt.id,
-      editorContent.trim(),
-      editorCode.trim() ? { language: editorLanguage, code: editorCode.trim() } : undefined
-    );
-    setEditorContent('');
-    setEditorCode('');
-    setShowCodeInput(false);
-    setIsSubmitting(false);
+    try {
+      await addAnswer(
+        doubt.id,
+        editorContent.trim(),
+        editorCode.trim() ? { language: editorLanguage, code: editorCode.trim() } : undefined
+      );
+      setEditorContent('');
+      setEditorCode('');
+      setShowCodeInput(false);
 
-    confetti({
-      particleCount: 70,
-      spread: 70,
-      origin: { y: 0.7 }
-    });
+      confetti({
+        particleCount: 70,
+        spread: 70,
+        origin: { y: 0.7 }
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const insertMarkdown = (syntax: string) => {
@@ -432,7 +480,19 @@ export const DoubtDetailPage: React.FC = () => {
           )}
         </div>
 
-        {answers.length > 0 ? (
+        {answersStatus === 'loading' ? (
+          <div className="space-y-3" role="status" aria-busy="true">
+            <div className="h-24 rounded-2xl bg-slate-900/60 border border-slate-800 animate-pulse" />
+            <div className="h-24 rounded-2xl bg-slate-900/60 border border-slate-800 animate-pulse" />
+            <span className="sr-only">Loading solutions…</span>
+          </div>
+        ) : answersStatus === 'error' ? (
+          <div className="p-8 text-center rounded-2xl bg-slate-900/40 border border-rose-500/30" role="alert">
+            <p className="text-xs text-slate-400">
+              We could not load the solutions for this question. Refresh the page to try again.
+            </p>
+          </div>
+        ) : answers.length > 0 ? (
           <div className="space-y-4">
             {answers.map(ans => {
               const isAccepted = ans.isAccepted;

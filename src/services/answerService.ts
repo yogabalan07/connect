@@ -1,6 +1,10 @@
-import { Answer, Comment, User, toUserSnapshot } from '../types';
+import { Answer, User, toUserSnapshot } from '../types';
 import { createStore, LoadStatus, useStore } from '../lib/store';
 import { ServiceError } from '../lib/errors';
+import { getContentAdapter } from './contentAdapter';
+import type { CommentRecord, VoteValue } from './contentAdapter';
+import { mapFirestoreError } from './firestoreErrors';
+import { requireServiceActor } from './actor';
 
 interface AnswerState {
   answers: Answer[];
@@ -8,18 +12,68 @@ interface AnswerState {
   error?: string;
 }
 
-const store = createStore<AnswerState>({ answers: [], status: 'loading' });
+const store = createStore<AnswerState>({ answers: [], status: 'loading', error: undefined });
 
 export function canEditAnswer(answer: Answer, actor: User | null | undefined): boolean {
   if (!actor || !answer) return false;
   return actor.role === 'admin' || answer.authorId === actor.id;
 }
 
+function attach(answers: Answer[], comments: CommentRecord[], votes: Record<string, VoteValue>): Answer[] {
+  return answers.map(answer => ({
+    ...answer,
+    comments: comments
+      .filter(comment => comment.answerId === answer.id)
+      .map(({ doubtId: _doubtId, answerId: _answerId, ...comment }) => comment),
+    userVote: votes[answer.id] === undefined ? null : votes[answer.id] === 1 ? 'up' : 'down'
+  }));
+}
+
+async function viaAdapter<T>(task: () => Promise<T>): Promise<T> {
+  try {
+    return await task();
+  } catch (error) {
+    throw mapFirestoreError(error);
+  }
+}
+
+function findAnswer(answerId: string): Answer {
+  const answer = store.get().answers.find(a => a.id === answerId);
+  if (!answer) throw new ServiceError('answer/not-found', 'That answer no longer exists.');
+  return answer;
+}
+
 export const answerService = {
   store,
 
   bootstrap(): void {
-    store.set(prev => ({ ...prev, status: 'ready' }));
+    store.set(prev => ({ ...prev, status: 'loading', error: undefined }));
+  },
+
+  /**
+   * Loads one doubt's answers and its clarification comments in two reads.
+   * Answers are never listed globally: `firestore.rules` scopes them under
+   * the doubt, so a detail page is the only place they exist.
+   */
+  async loadForDoubt(doubtId: string): Promise<void> {
+    if (!doubtId) return;
+    const actorId = requireServiceActor();
+    try {
+      const [answers, comments, votes] = await Promise.all([
+        viaAdapter(() => getContentAdapter().listAnswers(doubtId)),
+        viaAdapter(() => getContentAdapter().listComments(doubtId)),
+        viaAdapter(() => getContentAdapter().listVotes(actorId))
+      ]);
+      store.set(prev => ({
+        ...prev,
+        answers: attach(answers, comments, votes.answers),
+        status: 'ready',
+        error: undefined
+      }));
+    } catch (error) {
+      const mapped = mapFirestoreError(error);
+      store.set(prev => ({ ...prev, status: 'error', error: mapped.message }));
+    }
   },
 
   getAll(): Answer[] {
@@ -31,23 +85,22 @@ export const answerService = {
       .get()
       .answers.filter(a => a.doubtId === doubtId)
       .sort(
-        (a, b) =>
-          (b.isAccepted ? 1 : 0) - (a.isAccepted ? 1 : 0) || b.upvotes - a.upvotes
+        (a, b) => (b.isAccepted ? 1 : 0) - (a.isAccepted ? 1 : 0) || b.upvotes - a.upvotes
       );
   },
 
-  add(
+  async add(
     doubtId: string,
     author: User,
     content: string,
     codeSnippet?: Answer['codeSnippet'],
     mentions?: string[]
-  ): Answer {
+  ): Promise<Answer> {
     const trimmed = content.trim();
     if (!trimmed) throw new ServiceError('answer/invalid', 'An answer cannot be empty.');
 
-    const newAnswer: Answer = {
-      id: `ans-${Date.now()}`,
+    const draft: Answer = {
+      id: '',
       doubtId,
       authorId: author.id,
       authorSnapshot: toUserSnapshot(author),
@@ -61,17 +114,17 @@ export const answerService = {
       comments: []
     };
 
-    store.set(prev => ({ ...prev, answers: [...prev.answers, newAnswer] }));
-    return newAnswer;
+    const created = await viaAdapter(() => getContentAdapter().createAnswer(draft));
+    store.set(prev => ({ ...prev, answers: [...prev.answers, { ...created, comments: [], userVote: null }] }));
+    return created;
   },
 
-  update(
+  async update(
     answerId: string,
     actor: User,
     patch: { content?: string; codeSnippet?: Answer['codeSnippet'] }
-  ): Answer {
-    const existing = store.get().answers.find(a => a.id === answerId);
-    if (!existing) throw new ServiceError('answer/not-found', 'That answer no longer exists.');
+  ): Promise<Answer> {
+    const existing = findAnswer(answerId);
     if (!canEditAnswer(existing, actor)) {
       throw new ServiceError('answer/forbidden', 'Only the author or an admin can edit this answer.');
     }
@@ -79,122 +132,143 @@ export const answerService = {
       throw new ServiceError('answer/invalid', 'An answer cannot be empty.');
     }
 
-    const updated: Answer = {
-      ...existing,
-      content: patch.content !== undefined ? patch.content.trim() : existing.content,
-      codeSnippet: patch.codeSnippet !== undefined ? patch.codeSnippet : existing.codeSnippet,
-      updatedAt: 'Just now'
-    };
-
+    const updated = await viaAdapter(() => getContentAdapter().updateAnswer(existing.doubtId, answerId, patch));
+    const merged = { ...existing, ...updated };
     store.set(prev => ({
       ...prev,
-      answers: prev.answers.map(a => (a.id === answerId ? updated : a))
+      answers: prev.answers.map(a => (a.id === answerId ? { ...merged, comments: a.comments } : a))
     }));
-    return updated;
+    return merged;
   },
 
-  remove(answerId: string, actor: User): Answer {
-    const existing = store.get().answers.find(a => a.id === answerId);
-    if (!existing) throw new ServiceError('answer/not-found', 'That answer no longer exists.');
+  async remove(answerId: string, actor: User): Promise<Answer> {
+    const existing = findAnswer(answerId);
     if (!canEditAnswer(existing, actor)) {
       throw new ServiceError('answer/forbidden', 'Only the author or an admin can delete this answer.');
     }
+    await viaAdapter(() => getContentAdapter().deleteAnswer(existing.doubtId, answerId));
     store.set(prev => ({ ...prev, answers: prev.answers.filter(a => a.id !== answerId) }));
     return existing;
   },
 
-  vote(answerId: string, type: 'up' | 'down'): void {
+  /** Applies the voter's own transition and persists it with the counters. */
+  async vote(answerId: string, type: 'up' | 'down'): Promise<void> {
+    const actorId = requireServiceActor();
+    const answer = findAnswer(answerId);
+    const previous = store.get();
+
+    const currentVote = answer.userVote;
+    let newVote: 'up' | 'down' | null = type;
+    let upDelta = 0;
+    let downDelta = 0;
+    if (currentVote === type) {
+      newVote = null;
+      if (type === 'up') upDelta = -1;
+      else downDelta = -1;
+    } else if (currentVote === null || currentVote === undefined) {
+      if (type === 'up') upDelta = 1;
+      else downDelta = 1;
+    } else if (type === 'up') {
+      upDelta = 1;
+      downDelta = -1;
+    } else {
+      upDelta = -1;
+      downDelta = 1;
+    }
+
+    const optimistic: Answer = {
+      ...answer,
+      upvotes: Math.max(0, answer.upvotes + upDelta),
+      downvotes: Math.max(0, answer.downvotes + downDelta),
+      userVote: newVote
+    };
     store.set(prev => ({
       ...prev,
-      answers: prev.answers.map(a => {
-        if (a.id !== answerId) return a;
-        const currentVote = a.userVote;
-        let newVote: 'up' | 'down' | null = type;
-        let upDelta = 0;
-        let downDelta = 0;
-
-        if (currentVote === type) {
-          newVote = null;
-          if (type === 'up') upDelta = -1;
-          else downDelta = -1;
-        } else if (currentVote === null || currentVote === undefined) {
-          if (type === 'up') upDelta = 1;
-          else downDelta = 1;
-        } else if (type === 'up') {
-          upDelta = 1;
-          downDelta = -1;
-        } else {
-          upDelta = -1;
-          downDelta = 1;
-        }
-
-        return {
-          ...a,
-          upvotes: Math.max(0, a.upvotes + upDelta),
-          downvotes: Math.max(0, a.downvotes + downDelta),
-          userVote: newVote
-        };
-      })
+      answers: prev.answers.map(a => (a.id === answerId ? optimistic : a))
     }));
+
+    try {
+      await viaAdapter(() =>
+        getContentAdapter().saveVote(actorId, {
+          targetType: 'answer',
+          doubtId: answer.doubtId,
+          targetId: answerId,
+          value: newVote === 'up' ? 1 : newVote === 'down' ? -1 : 0,
+          upvotes: optimistic.upvotes,
+          downvotes: optimistic.downvotes
+        })
+      );
+    } catch (error) {
+      store.set(prev => ({ ...prev, ...previous }));
+      throw error;
+    }
   },
 
-  /** Single accepted answer per doubt. Returns true when the answer is now accepted. */
-  setAccepted(doubtId: string, answerId: string): boolean {
-    let nowAccepted = false;
+  /**
+   * Single accepted answer per doubt. Returns true when the answer is now
+   * accepted; the adapter clears every other accepted answer in the same
+   * atomic batch as the doubt's `acceptedAnswerId`.
+   */
+  async setAccepted(doubtId: string, answerId: string): Promise<boolean> {
+    const target = store.get().answers.find(a => a.id === answerId);
+    if (!target) throw new ServiceError('answer/not-found', 'That answer no longer exists.');
+    const nowAccepted = !target.isAccepted;
 
+    await viaAdapter(() => getContentAdapter().setAcceptedAnswer(doubtId, answerId, nowAccepted));
     store.set(prev => ({
       ...prev,
-      answers: prev.answers.map(a => {
-        if (a.doubtId !== doubtId) return a;
-        if (a.id === answerId) {
-          nowAccepted = !a.isAccepted;
-          return { ...a, isAccepted: nowAccepted };
-        }
-        return a.isAccepted ? { ...a, isAccepted: false } : a;
-      })
+      answers: prev.answers.map(a =>
+        a.doubtId === doubtId ? { ...a, isAccepted: a.id === answerId ? nowAccepted : false } : a
+      )
     }));
-
     return nowAccepted;
   },
 
-  addComment(
+  async addComment(
     answerId: string,
     author: User,
     content: string,
     parentCommentId?: string,
     mentions?: string[]
-  ): Comment {
+  ): Promise<CommentRecord> {
     const trimmed = content.trim();
     if (!trimmed) throw new ServiceError('comment/invalid', 'A comment cannot be empty.');
+    const answer = findAnswer(answerId);
 
-    const newComment: Comment = {
-      id: `comm-${Date.now()}`,
-      authorId: author.id,
-      authorName: author.name,
-      authorAvatar: author.avatar,
-      content: trimmed,
-      createdAt: 'Just now',
-      parentCommentId,
-      mentions
-    };
+    const created = await viaAdapter(() =>
+      getContentAdapter().createComment(answer.doubtId, answerId, {
+        id: '',
+        authorId: author.id,
+        authorName: author.name,
+        authorAvatar: author.avatar,
+        content: trimmed,
+        createdAt: 'Just now',
+        parentCommentId,
+        mentions
+      })
+    );
 
+    const { doubtId: _doubtId, answerId: _answerId, ...comment } = created;
     store.set(prev => ({
       ...prev,
       answers: prev.answers.map(a =>
-        a.id === answerId ? { ...a, comments: [...a.comments, newComment] } : a
+        a.id === answerId ? { ...a, comments: [...a.comments, comment] } : a
       )
     }));
-    return newComment;
+    return created;
   },
 
+  /** Clears local answers for a doubt that is about to be deleted. */
   removeForDoubt(doubtId: string): void {
-    store.set(prev => ({
-      ...prev,
-      answers: prev.answers.filter(a => a.doubtId !== doubtId)
-    }));
+    store.set(prev => ({ ...prev, answers: prev.answers.filter(a => a.doubtId !== doubtId) }));
   }
 };
 
 export function useAnswersStore(): AnswerState {
   return useStore(store);
+}
+
+/** Test seam: empties the answer cache without touching the adapter. */
+export function resetAnswerStoreForTests(): void {
+  store.set({ answers: [], status: 'loading', error: undefined });
 }

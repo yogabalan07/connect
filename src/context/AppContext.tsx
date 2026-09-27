@@ -67,28 +67,29 @@ interface AppContextType {
 
   // Doubts
   getDoubtById: (id: string) => Doubt | undefined;
-  createDoubt: (input: CreateDoubtInput) => string;
-  updateDoubt: (id: string, patch: UpdateDoubtInput) => void;
-  deleteDoubt: (id: string) => void;
-  toggleVoteDoubt: (id: string, type: 'up' | 'down') => void;
-  toggleBookmark: (id: string) => void;
+  createDoubt: (input: CreateDoubtInput) => Promise<string>;
+  updateDoubt: (id: string, patch: UpdateDoubtInput) => Promise<void>;
+  deleteDoubt: (id: string) => Promise<void>;
+  toggleVoteDoubt: (id: string, type: 'up' | 'down') => Promise<void>;
+  toggleBookmark: (id: string) => Promise<void>;
 
   // Answers & comments
   getAnswersForDoubt: (doubtId: string) => Answer[];
-  addAnswer: (doubtId: string, content: string, codeSnippet?: Answer['codeSnippet']) => void;
-  updateAnswer: (answerId: string, patch: { content?: string; codeSnippet?: Answer['codeSnippet'] }) => void;
-  deleteAnswer: (answerId: string) => void;
-  acceptAnswer: (doubtId: string, answerId: string) => void;
-  toggleVoteAnswer: (answerId: string, type: 'up' | 'down') => void;
-  addCommentToAnswer: (answerId: string, text: string, parentCommentId?: string) => void;
+  loadAnswersForDoubt: (doubtId: string) => Promise<void>;
+  addAnswer: (doubtId: string, content: string, codeSnippet?: Answer['codeSnippet']) => Promise<void>;
+  updateAnswer: (answerId: string, patch: { content?: string; codeSnippet?: Answer['codeSnippet'] }) => Promise<void>;
+  deleteAnswer: (answerId: string) => Promise<void>;
+  acceptAnswer: (doubtId: string, answerId: string) => Promise<void>;
+  toggleVoteAnswer: (answerId: string, type: 'up' | 'down') => Promise<void>;
+  addCommentToAnswer: (answerId: string, text: string, parentCommentId?: string) => Promise<void>;
 
   // Social
-  toggleFollowUser: (userId: string) => void;
-  toggleFollowTag: (tagId: string) => void;
+  toggleFollowUser: (userId: string) => Promise<void>;
+  toggleFollowTag: (tagId: string) => Promise<void>;
 
   // Notifications
-  markNotificationRead: (id: string) => void;
-  markAllNotificationsRead: () => void;
+  markNotificationRead: (id: string) => Promise<void>;
+  markAllNotificationsRead: () => Promise<void>;
   unreadNotificationsCount: number;
 
   // Messaging
@@ -118,8 +119,8 @@ interface AppContextType {
   }) => Promise<boolean>;
   saveAdminSettings: (patch: Partial<AdminSettings>) => Promise<boolean>;
   createAnnouncement: (ann: Omit<Announcement, 'id' | 'createdAt' | 'authorName' | 'isActive'>) => void;
-  createCategory: (cat: Omit<Category, 'id' | 'questionsCount'>) => void;
-  deleteCategory: (catId: string) => void;
+  createCategory: (cat: Omit<Category, 'id' | 'questionsCount'>) => Promise<void>;
+  deleteCategory: (catId: string) => Promise<void>;
 
   // Toasts
   toasts: ToastItem[];
@@ -136,7 +137,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { currentUser } = useAuth();
   const { users } = useUsers();
-  const { doubts, getDoubtById } = useDoubts();
+  const { doubts, getDoubtById, status: doubtsStatus } = useDoubts();
   const {
     notifications,
     unreadCount,
@@ -225,59 +226,72 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // ---------------------------------------------------------------- Doubts
   const createDoubt = useCallback(
-    (input: CreateDoubtInput): string => {
-      const user = requireUser();
-      const doubt = doubtService.create(user, {
-        ...input,
-        mentions: extractMentions(input.description)
-      });
-      userService.adjustStats(user.id, { questionsCount: 1, reputation: 5 });
-      catalogService.adjustQuestionCount(doubt.category, 1);
-      logDoubtAction(user, doubt.title, doubt.visibility);
-      toastStore.add('Your doubt was posted to the campus hub!', 'success');
-      return doubt.id;
+    async (input: CreateDoubtInput): Promise<string> => {
+      try {
+        const user = requireUser();
+        const doubt = await doubtService.create(user, {
+          ...input,
+          mentions: extractMentions(input.description)
+        });
+        userService.adjustStats(user.id, { questionsCount: 1, reputation: 5 });
+        await catalogService.adjustQuestionCount(doubt.category, 1);
+        logDoubtAction(user, doubt.title, doubt.visibility);
+        toastStore.add('Your doubt was posted to the campus hub!', 'success');
+        return doubt.id;
+      } catch (error) {
+        toastStore.add(errorMessage(error), 'error');
+        throw error;
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [currentUser]
   );
 
   const updateDoubt = useCallback(
-    (id: string, patch: UpdateDoubtInput) => {
-      run(user => {
-        doubtService.update(id, user, patch);
+    async (id: string, patch: UpdateDoubtInput): Promise<void> => {
+      await runAsync(async user => {
+        await doubtService.update(id, user, patch);
         logDoubtAction(user, patch.title ?? id, patch.visibility ?? 'public', true);
         toastStore.add('Your doubt has been updated.', 'success');
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentUser]
+    [currentUser, runAsync]
   );
 
   const deleteDoubt = useCallback(
-    (id: string) => {
-      run(user => {
+    async (id: string): Promise<void> => {
+      await runAsync(async user => {
         const target = doubtService.getById(id);
-        doubtService.remove(id);
+        await doubtService.remove(id);
         answerService.removeForDoubt(id);
-        if (target) catalogService.adjustQuestionCount(target.category, -1);
+        if (target) await catalogService.adjustQuestionCount(target.category, -1);
         logAudit(user, 'Deleted question', target ? target.title : id, 'doubt');
         toastStore.add('Question deleted.', 'info');
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentUser]
+    [currentUser, runAsync]
   );
 
-  const toggleVoteDoubt = useCallback((id: string, type: 'up' | 'down') => {
-    doubtService.vote(id, type);
+  const toggleVoteDoubt = useCallback(async (id: string, type: 'up' | 'down'): Promise<void> => {
+    try {
+      await doubtService.vote(id, type);
+    } catch (error) {
+      toastStore.add(errorMessage(error), 'error');
+    }
   }, []);
 
-  const toggleBookmark = useCallback((id: string) => {
-    const bookmarked = socialService.toggleBookmark(id);
-    toastStore.add(
-      bookmarked ? 'Doubt saved to your Bookmarks!' : 'Removed from bookmarks',
-      bookmarked ? 'success' : 'info'
-    );
+  const toggleBookmark = useCallback(async (id: string): Promise<void> => {
+    try {
+      const bookmarked = await socialService.toggleBookmark(id);
+      toastStore.add(
+        bookmarked ? 'Doubt saved to your Bookmarks!' : 'Removed from bookmarks',
+        bookmarked ? 'success' : 'info'
+      );
+    } catch (error) {
+      toastStore.add(errorMessage(error), 'error');
+    }
   }, []);
 
   // --------------------------------------------------------------- Answers
@@ -285,16 +299,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return answerService.getForDoubt(doubtId);
   }, []);
 
+  /** Fetches a doubt's answers + comments from Firestore (detail page). */
+  const loadAnswersForDoubt = useCallback(async (doubtId: string): Promise<void> => {
+    await answerService.loadForDoubt(doubtId);
+  }, []);
+
   const addAnswer = useCallback(
-    (doubtId: string, content: string, codeSnippet?: Answer['codeSnippet']) => {
-      run(user => {
+    (doubtId: string, content: string, codeSnippet?: Answer['codeSnippet']) =>
+      runAsync(async user => {
         const doubt = doubtService.getById(doubtId);
-        answerService.add(doubtId, user, content, codeSnippet, extractMentions(content));
-        doubtService.setAnswersCount(doubtId, 1);
+        await answerService.add(doubtId, user, content, codeSnippet, extractMentions(content));
         userService.adjustStats(user.id, { answersCount: 1, reputation: 10 });
 
         if (doubt && doubt.authorId !== user.id) {
-          notificationService.push({
+          await notificationService.push({
             userId: doubt.authorId,
             type: 'answer',
             title: 'New Solution on your Question',
@@ -308,47 +326,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
 
         toastStore.add('Your solution has been submitted!', 'success');
-      });
-    },
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentUser]
+    [currentUser, runAsync]
   );
 
   const updateAnswer = useCallback(
-    (answerId: string, patch: { content?: string; codeSnippet?: Answer['codeSnippet'] }) => {
-      run(user => {
-        answerService.update(answerId, user, patch);
+    (answerId: string, patch: { content?: string; codeSnippet?: Answer['codeSnippet'] }) =>
+      runAsync(async user => {
+        await answerService.update(answerId, user, patch);
         toastStore.add('Answer updated.', 'success');
-      });
-    },
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentUser]
+    [currentUser, runAsync]
   );
 
   const deleteAnswer = useCallback(
-    (answerId: string) => {
-      run(user => {
-        const removed = answerService.remove(answerId, user);
-        doubtService.setAnswersCount(removed.doubtId, -1);
+    (answerId: string) =>
+      runAsync(async user => {
+        const removed = await answerService.remove(answerId, user);
         userService.adjustStats(user.id, { answersCount: -1 });
+        logAudit(user, 'Deleted answer', removed.id, 'doubt');
         toastStore.add('Answer deleted.', 'info');
-      });
-    },
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentUser]
+    [currentUser, runAsync]
   );
 
   const acceptAnswer = useCallback(
-    (doubtId: string, answerId: string) => {
-      run(user => {
-        const isNowAccepted = answerService.setAccepted(doubtId, answerId);
-        doubtService.setAccepted(doubtId, isNowAccepted);
+    (doubtId: string, answerId: string) =>
+      runAsync(async user => {
+        const isNowAccepted = await answerService.setAccepted(doubtId, answerId);
         const answer = answerService.getAll().find(a => a.id === answerId);
 
         if (isNowAccepted && answer) {
           userService.adjustStats(answer.authorId, { reputation: 15, acceptedCount: 1 });
           if (answer.authorId !== user.id) {
-            notificationService.push({
+            await notificationService.push({
               userId: answer.authorId,
               type: 'accepted',
               title: 'Answer Accepted! (+15 Rep)',
@@ -364,37 +378,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         } else {
           toastStore.add('Unmarked accepted answer.', 'info');
         }
-      });
-    },
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentUser]
+    [currentUser, runAsync]
   );
 
-  const toggleVoteAnswer = useCallback((answerId: string, type: 'up' | 'down') => {
-    answerService.vote(answerId, type);
+  const toggleVoteAnswer = useCallback(async (answerId: string, type: 'up' | 'down'): Promise<void> => {
+    try {
+      await answerService.vote(answerId, type);
+    } catch (error) {
+      toastStore.add(errorMessage(error), 'error');
+    }
   }, []);
 
   const addCommentToAnswer = useCallback(
-    (answerId: string, text: string, parentCommentId?: string) => {
-      run(user => {
-        answerService.addComment(answerId, user, text, parentCommentId, extractMentions(text));
+    (answerId: string, text: string, parentCommentId?: string) =>
+      runAsync(async user => {
+        await answerService.addComment(answerId, user, text, parentCommentId, extractMentions(text));
         toastStore.add('Comment published.', 'success');
-      });
-    },
+      }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentUser]
+    [currentUser, runAsync]
   );
 
   // ---------------------------------------------------------------- Social
   const toggleFollowUser = useCallback(
-    (userId: string) => {
-      run(user => {
+    (userId: string) =>
+      runAsync(async user => {
         const target = userService.getById(userId);
-        const nowFollowing = socialService.toggleFollow(userId);
+        const nowFollowing = await socialService.toggleFollow(userId);
         userService.adjustStats(userId, { followersCount: nowFollowing ? 1 : -1 });
 
         if (nowFollowing && target) {
-          notificationService.push({
+          await notificationService.push({
             userId: target.id,
             type: 'follow',
             title: 'New Follower',
@@ -411,28 +427,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           nowFollowing ? `Now following ${target ? target.name : 'user'}!` : `Unfollowed ${target ? target.name : 'user'}.`,
           nowFollowing ? 'success' : 'info'
         );
-      });
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [currentUser, runAsync]
+  );
+
+  const toggleFollowTag = useCallback(
+    async (tagId: string): Promise<void> => {
+      try {
+        const { following, tag } = await catalogService.toggleFollowTag(requireUser().id, tagId);
+        if (tag) {
+          toastStore.add(
+            following ? `Subscribed to #${tag.name}` : `Unsubscribed from #${tag.name}`,
+            'info'
+          );
+        }
+      } catch (error) {
+        toastStore.add(errorMessage(error), 'error');
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [currentUser]
   );
 
-  const toggleFollowTag = useCallback((tagId: string) => {
-    const { following, tag } = catalogService.toggleFollowTag(tagId);
-    if (tag) {
-      toastStore.add(
-        following ? `Subscribed to #${tag.name}` : `Unsubscribed from #${tag.name}`,
-        'info'
-      );
-    }
-  }, []);
-
   // ---------------------------------------------------------- Notifications
-  const markNotificationRead = useCallback((id: string) => markRead(id), [markRead]);
+  const markNotificationRead = useCallback(
+    async (id: string): Promise<void> => {
+      try {
+        await markRead(id);
+      } catch (error) {
+        toastStore.add(errorMessage(error), 'error');
+      }
+    },
+    [markRead]
+  );
 
-  const markAllNotificationsRead = useCallback(() => {
-    markAllRead();
-    toastStore.add('All notifications marked as read', 'info');
+  const markAllNotificationsRead = useCallback(async (): Promise<void> => {
+    try {
+      await markAllRead();
+      toastStore.add('All notifications marked as read', 'info');
+    } catch (error) {
+      toastStore.add(errorMessage(error), 'error');
+    }
   }, [markAllRead]);
 
   // --------------------------------------------------------------- Profile
@@ -598,11 +634,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const createAnnouncement = useCallback(
     (ann: Omit<Announcement, 'id' | 'createdAt' | 'authorName' | 'isActive'>) => {
-      run(user => {
+      void runAsync(async user => {
         const created = admin.createAnnouncement(ann);
-        userService.getUsers().filter(u => u.status === 'approved').forEach(u => {
-          notificationService.push({
-            userId: u.id,
+        const approved = userService.getUsers().filter(u => u.status === 'approved');
+        for (const member of approved) {
+          await notificationService.push({
+            userId: member.id,
             type: 'announcement',
             title: `Campus Announcement: ${created.title}`,
             message: created.content,
@@ -610,30 +647,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             read: false,
             senderName: created.authorName
           });
-        });
+        }
         toastStore.add('Campus announcement broadcasted!', 'success');
       });
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentUser, admin]
+    [currentUser, admin, runAsync]
   );
 
   const createCategory = useCallback(
-    (cat: Omit<Category, 'id' | 'questionsCount'>) => {
-      run(() => {
-        const created = catalogService.createCategory(cat);
+    async (cat: Omit<Category, 'id' | 'questionsCount'>): Promise<void> => {
+      await runAsync(async () => {
+        const created = await catalogService.createCategory(cat);
         toastStore.add(`Academic category "${created.name}" created!`, 'success');
       });
     },
-    []
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [runAsync]
   );
 
-  const deleteCategory = useCallback((catId: string) => {
-    run(() => {
-      catalogService.deleteCategory(catId);
-      toastStore.add('Category removed.', 'info');
-    });
-  }, []);
+  const deleteCategory = useCallback(
+    async (catId: string): Promise<void> => {
+      await runAsync(async () => {
+        await catalogService.deleteCategory(catId);
+        toastStore.add('Category removed.', 'info');
+      });
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [runAsync]
+  );
 
   // -------------------------------------------------------------- Messages
   const sendMessage = useCallback(
@@ -645,6 +687,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const dataStatus = useMemo<LoadStatus>(() => {
     const statuses: LoadStatus[] = [
+      doubtsStatus,
       answersState.status,
       socialState.status,
       catalogState.status,
@@ -655,7 +698,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (statuses.some(s => s === 'error')) return 'error';
     if (statuses.every(s => s === 'ready')) return 'ready';
     return 'loading';
-  }, [answersState.status, socialState.status, catalogState.status, notificationsStatus, messagesStatus, admin.status]);
+  }, [
+    doubtsStatus,
+    answersState.status,
+    socialState.status,
+    catalogState.status,
+    notificationsStatus,
+    messagesStatus,
+    admin.status
+  ]);
 
   const value = useMemo<AppContextType>(
     () => ({
@@ -683,6 +734,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       toggleVoteDoubt,
       toggleBookmark,
       getAnswersForDoubt,
+      loadAnswersForDoubt,
       addAnswer,
       updateAnswer,
       deleteAnswer,
@@ -736,6 +788,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       toggleVoteDoubt,
       toggleBookmark,
       getAnswersForDoubt,
+      loadAnswersForDoubt,
       addAnswer,
       updateAnswer,
       deleteAnswer,

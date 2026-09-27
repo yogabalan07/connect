@@ -116,15 +116,16 @@ export const reportService = {
       if (report.targetType === 'doubt') {
         const doubt = doubtService.getById(report.targetId);
         if (doubt) {
-          doubtService.remove(doubt.id);
+          await doubtService.remove(doubt.id);
           answerService.removeForDoubt(doubt.id);
-          catalogService.adjustQuestionCount(doubt.category, -1);
+          await catalogService.adjustQuestionCount(doubt.category, -1);
         }
       } else if (report.targetType === 'answer') {
         const answer = answerService.getAll().find(a => a.id === report.targetId);
         if (answer) {
-          answerService.remove(answer.id, moderator);
-          doubtService.setAnswersCount(answer.doubtId, -1);
+          // The adapter moves `answersCount` and `lastAnswerId` in the same
+          // atomic write as the answer document itself.
+          await answerService.remove(answer.id, moderator);
         }
       }
 

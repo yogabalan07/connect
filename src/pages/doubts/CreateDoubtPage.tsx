@@ -3,7 +3,6 @@ import { useNavigate, useParams, Link } from 'react-router-dom';
 import {
   Lock,
   Globe,
-  Upload,
   Code2,
   FileText,
   X,
@@ -93,18 +92,7 @@ export const CreateDoubtPage: React.FC = () => {
     }
   };
 
-  const handleAddMockFile = () => {
-    const mockFiles = [
-      { name: 'waveform_trace.png', size: '180 KB', type: 'image' as const },
-      { name: 'circuit_schematic.pdf', size: '1.4 MB', type: 'pdf' as const },
-      { name: 'memory_dump.txt', size: '42 KB', type: 'pdf' as const }
-    ];
-    const pick = mockFiles[attachments.length % mockFiles.length];
-    setAttachments([...attachments, pick]);
-    addToast(`Attached ${pick.name}`, 'info');
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !description.trim()) return;
 
@@ -127,23 +115,27 @@ export const CreateDoubtPage: React.FC = () => {
       attachments: attachments.map(a => ({ name: a.name, size: a.size, type: a.type, url: '#' }))
     };
 
-    if (isEdit && editingDoubt) {
-      updateDoubt(editingDoubt.id, payload);
+    try {
+      if (isEdit && editingDoubt) {
+        await updateDoubt(editingDoubt.id, payload);
+        navigate(`/app/doubts/${editingDoubt.id}`);
+        return;
+      }
+
+      const newDoubtId = await createDoubt(payload);
+
+      confetti({
+        particleCount: 80,
+        spread: 70,
+        origin: { y: 0.6 }
+      });
+
+      navigate(`/app/doubts/${newDoubtId}`);
+    } catch {
+      // The failure is already surfaced as a toast by the context action;
+      // stay on the form so nothing the student typed is lost.
       setIsSubmitting(false);
-      navigate(`/app/doubts/${editingDoubt.id}`);
-      return;
     }
-
-    const newDoubtId = createDoubt(payload);
-    setIsSubmitting(false);
-
-    confetti({
-      particleCount: 80,
-      spread: 70,
-      origin: { y: 0.6 }
-    });
-
-    navigate(`/app/doubts/${newDoubtId}`);
   };
 
   const filteredUsers = users
@@ -452,14 +444,8 @@ export const CreateDoubtPage: React.FC = () => {
                   <Code2 className="w-3.5 h-3.5" />
                   <span>Attach Code</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={handleAddMockFile}
-                  className="flex items-center gap-1 px-2 py-0.5 rounded text-xs hover:bg-slate-800 ml-auto"
-                >
-                  <Upload className="w-3.5 h-3.5" />
-                  <span>Attach File/Image</span>
-                </button>
+                {/* File uploads need a Cloud Storage bucket + `storage.rules`;
+                    until that ships no fake "attached file" is fabricated. */}
               </div>
 
               <textarea
@@ -584,7 +570,7 @@ export const CreateDoubtPage: React.FC = () => {
           <button
             type="button"
             onClick={() => {
-              addToast('Draft persistence arrives with the Firebase phase - this page keeps your text while you stay on it.', 'info');
+              addToast('Your draft stays on this page only — it is not saved to your account.', 'info');
             }}
             className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 text-xs font-medium border border-slate-800"
           >

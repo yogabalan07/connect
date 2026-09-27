@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import {
   Search,
   Filter,
@@ -13,12 +13,14 @@ import {
   RotateCcw
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { useDoubts } from '../../hooks/useDoubts';
 import { DoubtCard } from '../../components/cards/DoubtCard';
 import { Department, AcademicYear } from '../../types';
 
 export const ExplorePage: React.FC = () => {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { doubts, categories, tags } = useApp();
+  const { categories, tags } = useApp();
+  const { doubts, status: doubtsStatus, reload } = useDoubts();
 
   // URL query params
   const paramTag = searchParams.get('tag') || '';
@@ -95,7 +97,8 @@ export const ExplorePage: React.FC = () => {
 
   // Sorting
   if (sortBy === 'latest') {
-    // Keep standard ordering
+    // Newest first — Firestore auto-ids are time ordered.
+    filtered.sort((a, b) => b.id.localeCompare(a.id));
   } else if (sortBy === 'trending') {
     filtered.sort((a, b) => (b.upvotes - b.downvotes) - (a.upvotes - a.downvotes));
   } else if (sortBy === 'most_answered') {
@@ -297,8 +300,37 @@ export const ExplorePage: React.FC = () => {
       </div>
 
       {/* Doubts Result List */}
-      <div className="space-y-4">
-        {filtered.length > 0 ? (
+      <div className="space-y-4" aria-busy={doubtsStatus === 'loading'}>
+        {doubtsStatus === 'loading' ? (
+          <div className="space-y-4" role="status">
+            {[0, 1, 2].map(index => (
+              <div
+                key={index}
+                className="h-36 rounded-3xl bg-slate-900/60 border border-slate-800 animate-pulse"
+              />
+            ))}
+            <span className="sr-only">Loading doubts…</span>
+          </div>
+        ) : doubtsStatus === 'error' ? (
+          <div
+            className="p-16 text-center rounded-2xl bg-slate-900/40 border border-rose-500/30"
+            role="alert"
+          >
+            <div className="w-12 h-12 rounded-2xl bg-rose-500/10 text-rose-400 flex items-center justify-center mx-auto mb-3">
+              <HelpCircle className="w-6 h-6" />
+            </div>
+            <h3 className="text-sm font-bold text-white">We could not load the doubt feed</h3>
+            <p className="mt-1 text-xs text-slate-400 max-w-sm mx-auto">
+              Campus services are unreachable right now. Check your connection and try again.
+            </p>
+            <button
+              onClick={reload}
+              className="mt-4 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"
+            >
+              Try again
+            </button>
+          </div>
+        ) : filtered.length > 0 ? (
           filtered.map(doubt => (
             <DoubtCard
               key={doubt.id}
@@ -306,6 +338,22 @@ export const ExplorePage: React.FC = () => {
               onTagClick={tag => setSelectedTag(tag)}
             />
           ))
+        ) : doubts.length === 0 ? (
+          <div className="p-16 text-center rounded-2xl bg-slate-900/40 border border-dashed border-slate-800">
+            <div className="w-12 h-12 rounded-2xl bg-slate-800 text-slate-400 flex items-center justify-center mx-auto mb-3">
+              <HelpCircle className="w-6 h-6" />
+            </div>
+            <h3 className="text-sm font-bold text-white">No doubts yet</h3>
+            <p className="mt-1 text-xs text-slate-400 max-w-sm mx-auto">
+              Be the first to post a question to the campus hub and your batch will see it.
+            </p>
+            <Link
+              to="/app/doubts/new"
+              className="mt-4 inline-block px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold"
+            >
+              Ask a doubt
+            </Link>
+          </div>
         ) : (
           <div className="p-16 text-center rounded-2xl bg-slate-900/40 border border-dashed border-slate-800">
             <div className="w-12 h-12 rounded-2xl bg-slate-800 text-slate-400 flex items-center justify-center mx-auto mb-3">
