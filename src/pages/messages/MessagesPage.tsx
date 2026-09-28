@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Search,
   Send,
@@ -35,8 +35,15 @@ export const MessagesPage: React.FC = () => {
     openConversation,
     users,
     currentUser,
-    dataStatus
+    dataStatus,
+    messagesError,
+    stopListeningMessages
   } = useApp();
+
+  // Leaving the page must not leave a thread streaming in the background.
+  // The inbox streams are unaffected, so badges keep moving while this
+  // component is unmounted.
+  useEffect(() => stopListeningMessages, [stopListeningMessages]);
 
   const [messageText, setMessageText] = useState('');
   const [searchConv, setSearchConv] = useState('');
@@ -169,6 +176,14 @@ export const MessagesPage: React.FC = () => {
             />
           </div>
         </div>
+
+        {/* A dropped stream degrades here instead of blanking the thread. */}
+        {messagesError ? (
+          <div className="px-4 py-2 flex items-start gap-2 text-[11px] text-amber-300 bg-amber-500/10 border-b border-amber-500/30">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+            <span>{messagesError}</span>
+          </div>
+        ) : null}
 
         {pickerOpen ? (
           <div className="flex-1 overflow-y-auto divide-y divide-slate-800/40">

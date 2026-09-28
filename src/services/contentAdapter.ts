@@ -11,6 +11,7 @@ import type {
   UserBadge
 } from '../types';
 import { firebaseContentAdapter } from './firebaseContentAdapter';
+import type { StreamHandlers, Unsubscribe } from './messagingAdapter';
 
 /**
  * Doubt-domain persistence contract.
@@ -274,6 +275,12 @@ export interface ContentAdapter {
 
   // ------------------------------------------------------------ Notifications
   listNotifications(actorId: string): Promise<Notification[]>;
+  /**
+   * Streams the actor's notifications. `onData` always delivers the whole
+   * authoritative result (never a delta) so a dismissal can be reflected
+   * without a refetch. Returns the unsubscribe handle.
+   */
+  subscribeToNotifications(actorId: string, handlers: StreamHandlers<Notification[]>): Unsubscribe;
   createNotification(notification: Notification): Promise<Notification>;
   markNotificationRead(actorId: string, id: string): Promise<void>;
   markAllNotificationsRead(actorId: string, ids: string[]): Promise<void>;

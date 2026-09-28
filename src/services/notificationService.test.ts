@@ -248,3 +248,43 @@ describe('notificationService.markAllRead', () => {
     expect(fake.notificationsFor(member.id)[0].read).toBe(false);
   });
 });
+
+describe('realtime stream', () => {
+  it('adds an event that arrives on the stream without another read', async () => {
+    await notificationService.loadAll(member.id);
+    const reads = fake.calls.listNotifications;
+
+    await fake.createNotification({ id: '', ...draft({ title: 'Just arrived' }) });
+
+    expect(fake.calls.listNotifications).toBe(reads);
+    expect(notificationService.getAll().map(n => n.title)).toContain('Just arrived');
+  });
+
+  it('keeps exactly one subscription however many times it loads', async () => {
+    await notificationService.loadAll(member.id);
+    await notificationService.loadAll(member.id);
+
+    expect(fake.activeStreamCount()).toBe(1);
+  });
+
+  it('drops the stream when the session is torn down', async () => {
+    await notificationService.loadAll(member.id);
+    expect(fake.activeStreamCount()).toBe(1);
+
+    notificationService.bootstrap();
+
+    expect(fake.activeStreamCount()).toBe(0);
+  });
+
+  it('keeps the loaded feed on screen when the stream fails', async () => {
+    await fake.createNotification({ id: '', ...draft({ title: 'Already loaded' }) });
+    await notificationService.loadAll(member.id);
+
+    fake.failStreams(new Error('connection lost'));
+
+    const state = notificationService.store.get();
+    expect(state.status).toBe('ready');
+    expect(state.notifications.map(n => n.title)).toEqual(['Already loaded']);
+    expect(state.error).toBeTruthy();
+  });
+});

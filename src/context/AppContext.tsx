@@ -114,6 +114,19 @@ interface AppContextType {
   /** Selects an existing thread, loads its history and advances my cursor. */
   openConversation: (conversationId: string) => Promise<void>;
   sendMessage: (receiverId: string, text: string, codeSnippet?: Message['codeSnippet']) => Promise<void>;
+  /**
+   * Sum of every thread's unread count, kept live by the Firestore
+   * listeners - no refetch is involved when it moves.
+   */
+  unreadMessagesCount: number;
+  /**
+   * Last messaging-stream failure, if one happened. Kept separate from the
+   * load status so a dropped connection degrades gracefully instead of
+   * blanking a thread somebody is reading.
+   */
+  messagesError: string | undefined;
+  /** Drops the open thread's stream (page unmount / logout teardown). */
+  stopListeningMessages: () => void;
 
   // Profile
   updateUserProfile: (data: EditableProfilePatch) => Promise<void>;
@@ -174,6 +187,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     sendMessage: sendMessageInternal,
     startConversation: startConversationInternal,
     openConversation: openConversationInternal,
+    totalUnread: unreadMessagesCount,
+    error: messagesError,
+    stopListening: stopListeningMessages,
     status: messagesStatus
   } = useMessages();
   const admin = useAdmin();
@@ -967,6 +983,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       startConversation,
       openConversation,
       sendMessage,
+      unreadMessagesCount,
+      messagesError,
+      stopListeningMessages,
       updateUserProfile,
       approveUser,
       rejectUser,
@@ -1027,6 +1046,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       startConversation,
       openConversation,
       sendMessage,
+      unreadMessagesCount,
+      messagesError,
+      stopListeningMessages,
       updateUserProfile,
       approveUser,
       rejectUser,

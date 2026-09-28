@@ -189,6 +189,24 @@ function readOf(conversationId: string, uid: string) {
   };
 }
 
+function notificationOf(id: string, userId: string, senderId: string) {
+  return {
+    id,
+    userId,
+    senderId,
+    senderName: senderId.toUpperCase(),
+    source: 'client',
+    type: 'answer',
+    title: 'New answer on your doubt',
+    message: 'Mentor replied to your question.',
+    link: '/app/doubts/d1',
+    sourceId: '',
+    timestamp: 'Just now',
+    read: false,
+    createdAtMs: Date.now()
+  };
+}
+
 rulesSuite('firestore.rules (emulator)', () => {
   let env: RulesTestEnvironment;
 
@@ -692,6 +710,87 @@ rulesSuite('firestore.rules (emulator)', () => {
         await setDoc(doc(context.firestore(), 'conversations', PAIR_ID), conversationOf(PAIR_ID, [ALICE, BOB]));
       });
       await assertFails(setDoc(doc(as(MALLORY), 'conversationReads', `${PAIR_ID}_${MALLORY}`), readOf(PAIR_ID, MALLORY)));
+    });
+
+    it('denies a thread that does not exist yet rather than revealing its absence', async () => {
+      // `threadMember()` cannot test membership against a missing document, so
+      // the rules refuse instead of answering "not found" - which is what stops
+      // anyone probing whether a pair has a thread. Creating it still works,
+      // because the client writes first and reads afterwards.
+      await assertFails(getDoc(doc(as(ALICE), 'conversations', PAIR_ID)));
+      await assertSucceeds(
+        setDoc(doc(as(ALICE), 'conversations', PAIR_ID), conversationOf(PAIR_ID, [ALICE, BOB]))
+      );
+      const snapshot = await assertSucceeds(getDoc(doc(as(ALICE), 'conversations', PAIR_ID)));
+      expect(snapshot.exists()).toBe(true);
+    });
+
+    it('lets a member create their first read receipt without reading it first', async () => {
+      await env.withSecurityRulesDisabled(async context => {
+        await setDoc(doc(context.firestore(), 'conversations', PAIR_ID), conversationOf(PAIR_ID, [ALICE, BOB]));
+      });
+
+      const receipt = doc(as(ALICE), 'conversationReads', `${PAIR_ID}_${ALICE}`);
+      await assertFails(getDoc(receipt));
+      // One write is all `markConversationRead` needs: create when absent,
+      // forward-only update when present, both proven by the rules.
+      await assertSucceeds(setDoc(receipt, readOf(PAIR_ID, ALICE)));
+      const snapshot = await assertSucceeds(getDoc(receipt));
+      expect(snapshot.exists()).toBe(true);
+    });
+
+    it('lists only my own read receipts with the scoped userId query', async () => {
+      await env.withSecurityRulesDisabled(async context => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'conversations', PAIR_ID), conversationOf(PAIR_ID, [ALICE, BOB]));
+        await setDoc(doc(db, 'conversationReads', `${PAIR_ID}_${ALICE}`), readOf(PAIR_ID, ALICE));
+        await setDoc(doc(db, 'conversationReads', `${PAIR_ID}_${BOB}`), readOf(PAIR_ID, BOB));
+      });
+
+      // This is exactly the query the read-receipt stream runs.
+      const mine = await assertSucceeds(
+        getDocs(query(collection(as(ALICE), 'conversationReads'), where('userId', '==', ALICE)))
+      );
+      expect(mine.docs.length).toBe(1);
+
+      await assertFails(getDocs(query(collection(as(ALICE), 'conversationReads'), where('userId', '==', BOB))));
+      await assertFails(getDocs(collection(as(ALICE), 'conversationReads')));
+    });
+
+    it('counts messages after a cursor inside my own thread and refuses a stranger', async () => {
+      await env.withSecurityRulesDisabled(async context => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'conversations', PAIR_ID), conversationOf(PAIR_ID, [ALICE, BOB]));
+        await setDoc(doc(db, 'conversations', PAIR_ID, 'messages', 'm1'), messageOf('m1', PAIR_ID, ALICE, BOB));
+        await setDoc(doc(db, 'conversations', PAIR_ID, 'messages', 'm2'), messageOf('m2', PAIR_ID, BOB, ALICE));
+      });
+
+      const window = (uid: string) =>
+        getDocs(query(collection(as(uid), 'conversations', PAIR_ID, 'messages'), where('createdAtMs', '>', 0)));
+
+      const mine = await assertSucceeds(window(ALICE));
+      expect(mine.docs.length).toBe(2);
+      await assertFails(window(MALLORY));
+    });
+  });
+
+  // ---------------------------------------------------------- notifications
+
+  describe('the notification inbox', () => {
+    it('lists only my events with the scoped userId query the stream runs', async () => {
+      await env.withSecurityRulesDisabled(async context => {
+        const db = context.firestore();
+        await setDoc(doc(db, 'notifications', 'n_mine'), notificationOf('n_mine', ALICE, BOB));
+        await setDoc(doc(db, 'notifications', 'n_theirs'), notificationOf('n_theirs', BOB, BOB));
+      });
+
+      const mine = await assertSucceeds(
+        getDocs(query(collection(as(ALICE), 'notifications'), where('userId', '==', ALICE)))
+      );
+      expect(mine.docs.map(item => item.id)).toEqual(['n_mine']);
+
+      await assertFails(getDocs(query(collection(as(ALICE), 'notifications'), where('userId', '==', BOB))));
+      await assertFails(getDocs(collection(as(ALICE), 'notifications')));
     });
   });
 

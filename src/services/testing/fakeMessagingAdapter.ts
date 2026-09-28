@@ -5,7 +5,9 @@ import {
   conversationIdFor,
   type ConversationRecord,
   type MessageDraft,
-  type MessagingAdapter
+  type MessagingAdapter,
+  type StreamHandlers,
+  type Unsubscribe
 } from '../messagingAdapter';
 
 /**
@@ -35,11 +37,31 @@ export interface FakeMessagingAdapter extends MessagingAdapter {
   setDenied(denied: boolean): void;
   clear(): void;
   readonly calls: Record<string, number>;
+
+  // ------------------------------------------------------------ realtime
+  /** `{kind, key}` for every listener that has not been unsubscribed. */
+  activeStreams(): Array<{ kind: StreamKind; key: string }>;
+  /** Number of live listeners - the duplicate-subscription assertion. */
+  activeStreamCount(): number;
+  /** Fails every live listener, as Firestore does on a network drop. */
+  failStreams(error: unknown): void;
 }
 
 /** The copy `firestoreErrors` maps `permission-denied` to. */
 export const DENIED_COPY =
   'You do not have permission to do that. Contact your department administrator.';
+
+/** Which realtime stream a listener is bound to. */
+export type StreamKind = 'conversations' | 'cursors' | 'messages';
+
+interface LiveStream {
+  kind: StreamKind;
+  /** `actorId` for list streams, `conversationId` for message streams. */
+  key: string;
+  onData: (value: unknown) => void;
+  onError: (error: unknown) => void;
+  active: boolean;
+}
 
 function notFound(message = 'That conversation no longer exists.'): ServiceError {
   return new ServiceError('message/not-found', message);
@@ -64,6 +86,70 @@ export function createFakeMessagingAdapter(): FakeMessagingAdapter {
     if (deniedMode) throw denied();
   };
 
+  const streams: LiveStream[] = [];
+
+  /**
+   * Registers a listener and returns its unsubscribe. Mirrors Firestore:
+   * the caller is responsible for holding exactly one per scope, and the
+   * unsubscribe must be safe to call twice.
+   */
+  function open(
+    kind: StreamKind,
+    key: string,
+    handlers: StreamHandlers<never>,
+    initial: unknown
+  ): Unsubscribe {
+    if (deniedMode) {
+      // Firestore reports a refused listener through `onError`, never as a
+      // synchronous throw, so the service's async error path is what runs.
+      queueMicrotask(() => handlers.onError(denied()));
+      return () => undefined;
+    }
+    const entry: LiveStream = {
+      kind,
+      key,
+      onData: handlers.onData as (value: unknown) => void,
+      onError: handlers.onError as (error: unknown) => void,
+      active: true
+    };
+    streams.push(entry);
+    queueMicrotask(() => {
+      if (entry.active) entry.onData(initial);
+    });
+    return () => {
+      entry.active = false;
+      const index = streams.indexOf(entry);
+      if (index !== -1) streams.splice(index, 1);
+    };
+  }
+
+  /** Pushes the current truth to every listener bound to `kind`/`key`. */
+  function emit(kind: StreamKind, key?: string): void {
+    streams
+      .filter(stream => stream.active && stream.kind === kind && (key === undefined || stream.key === key))
+      .forEach(stream => {
+        try {
+          if (kind === 'conversations') {
+            stream.onData(
+              adapter
+                .conversationRecords()
+                .filter(conversation => conversation.participants.includes(stream.key))
+            );
+          } else if (kind === 'cursors') {
+            const result: Record<string, number> = {};
+            cursors.forEach((value, readId) => {
+              if (readId.endsWith(`_${stream.key}`)) result[readId] = value;
+            });
+            stream.onData(result);
+          } else {
+            stream.onData(adapter.messageRecords(stream.key));
+          }
+        } catch (error) {
+          stream.onError(error);
+        }
+      });
+  }
+
   function require(id: string): ConversationRecord {
     const conversation = conversations.get(id);
     if (!conversation) throw notFound();
@@ -78,10 +164,23 @@ export function createFakeMessagingAdapter(): FakeMessagingAdapter {
       messages.clear();
       cursors.clear();
       deniedMode = false;
+      streams.splice(0, streams.length);
     },
 
     setDenied(denied: boolean): void {
       deniedMode = denied;
+    },
+
+    activeStreams(): Array<{ kind: StreamKind; key: string }> {
+      return streams.map(stream => ({ kind: stream.kind, key: stream.key }));
+    },
+
+    activeStreamCount(): number {
+      return streams.length;
+    },
+
+    failStreams(error: unknown): void {
+      streams.slice().forEach(stream => stream.onError(error));
     },
 
     seedConversations(list: ConversationRecord[]): void {
@@ -145,6 +244,8 @@ export function createFakeMessagingAdapter(): FakeMessagingAdapter {
       };
       conversations.set(id, created);
       messages.set(id, []);
+      // A brand-new thread is news to BOTH members, not just the creator.
+      [actorId, peerId].forEach(member => emit('conversations', member));
       return { ...created, participants: [...created.participants] };
     },
 
@@ -191,6 +292,9 @@ export function createFakeMessagingAdapter(): FakeMessagingAdapter {
         lastMessagePreview: draft.text.replace(/\s+/g, ' ').trim().slice(0, 200)
       });
 
+      emit('messages', draft.conversationId);
+      conversation.participants.forEach(member => emit('conversations', member));
+
       return { ...message };
     },
 
@@ -212,6 +316,8 @@ export function createFakeMessagingAdapter(): FakeMessagingAdapter {
       const current = cursors.get(readId) ?? 0;
       const next = Math.max(current, atMs);
       cursors.set(readId, next);
+      emit('cursors', actorId);
+      emit('messages', conversationId);
       return next;
     },
 
@@ -223,16 +329,55 @@ export function createFakeMessagingAdapter(): FakeMessagingAdapter {
         conversationId,
         bucket.filter(message => message.id !== messageId)
       );
+      emit('messages', conversationId);
     },
 
     async deleteConversation(conversationId: string): Promise<void> {
       count('deleteConversation');
       guard();
+      const members = conversations.get(conversationId)?.participants ?? [];
       conversations.delete(conversationId);
       messages.delete(conversationId);
       Array.from(cursors.keys())
         .filter(readId => readId.startsWith(`${conversationId}_`))
         .forEach(readId => cursors.delete(readId));
+      members.forEach(member => emit('conversations', member));
+    },
+
+    // -------------------------------------------------------- realtime
+
+    subscribeToConversations(
+      actorId: string,
+      handlers: StreamHandlers<ConversationRecord[]>
+    ): Unsubscribe {
+      count('subscribeToConversations');
+      const initial = adapter
+        .conversationRecords()
+        .filter(conversation => conversation.participants.includes(actorId));
+      return open('conversations', actorId, handlers as StreamHandlers<never>, initial);
+    },
+
+    subscribeToReadCursors(
+      actorId: string,
+      handlers: StreamHandlers<Record<string, number>>
+    ): Unsubscribe {
+      count('subscribeToReadCursors');
+      const initial: Record<string, number> = {};
+      cursors.forEach((value, readId) => {
+        if (readId.endsWith(`_${actorId}`)) initial[readId] = value;
+      });
+      return open('cursors', actorId, handlers as StreamHandlers<never>, initial);
+    },
+
+    subscribeToMessages(conversationId: string, handlers: StreamHandlers<Message[]>): Unsubscribe {
+      count('subscribeToMessages');
+      return open('messages', conversationId, handlers as StreamHandlers<never>, adapter.messageRecords(conversationId));
+    },
+
+    async countMessagesSince(conversationId: string, sinceMs: number): Promise<number> {
+      count('countMessagesSince');
+      guard();
+      return adapter.messageRecords(conversationId).filter(message => message.createdAtMs > sinceMs).length;
     }
   };
 

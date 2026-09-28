@@ -47,6 +47,25 @@ export function conversationIdFor(uidA: string, uidB: string): string {
   return uidA < uidB ? `${uidA}_${uidB}` : `${uidB}_${uidA}`;
 }
 
+/**
+ * Stops one realtime subscription. Idempotent by contract: calling it twice
+ * must not throw, so a React cleanup function and a service-level teardown
+ * can both run without coordinating.
+ */
+export type Unsubscribe = () => void;
+
+/** Callbacks every realtime subscription on this adapter reports through. */
+export interface StreamHandlers<T> {
+  /**
+   * Delivers the *complete, authoritative* result of the query on every
+   * change - never a delta. Applying it wholesale is what makes duplicates,
+   * deletions and reordering impossible to get wrong above this line.
+   */
+  onData: (value: T) => void;
+  /** Typed Firestore failure (`permission-denied`, `unavailable`, ...). */
+  onError: (error: unknown) => void;
+}
+
 export interface MessagingAdapter {
   /**
    * Every conversation the actor belongs to. Unsorted: ordering is a
@@ -78,6 +97,40 @@ export interface MessagingAdapter {
   deleteMessage(conversationId: string, messageId: string): Promise<void>;
   /** Removes a thread the actor belongs to, including its messages. */
   deleteConversation(conversationId: string): Promise<void>;
+
+  // ------------------------------------------------------- realtime (Phase 2/3)
+  /**
+   * Live view of the actor's conversation list: a new message from anyone in
+   * any of their threads arrives here without a refresh. The query is the
+   * same `array-contains` the one-shot read uses, so security and cost are
+   * unchanged - only the transport becomes a stream.
+   */
+  subscribeToConversations(
+    actorId: string,
+    handlers: StreamHandlers<ConversationRecord[]>
+  ): Unsubscribe;
+  /** Live view of `{conversationId: lastReadAtMs}` for the actor only. */
+  subscribeToReadCursors(
+    actorId: string,
+    handlers: StreamHandlers<Record<string, number>>
+  ): Unsubscribe;
+  /**
+   * Live view of one thread's messages, ascending, bounded by the same
+   * window as `listMessages`. Exactly one may exist per conversation - see
+   * `messageService`, which owns the uniqueness guarantee.
+   */
+  subscribeToMessages(
+    conversationId: string,
+    handlers: StreamHandlers<Message[]>
+  ): Unsubscribe;
+
+  /**
+   * Exact number of messages in a thread written after `sinceMs`, counted
+   * inside Firestore. Used for unread badges on threads whose history the
+   * client is not holding: one bounded RPC instead of downloading a thread
+   * nobody opened.
+   */
+  countMessagesSince(conversationId: string, sinceMs: number): Promise<number>;
 }
 
 let overrideAdapter: MessagingAdapter | null = null;

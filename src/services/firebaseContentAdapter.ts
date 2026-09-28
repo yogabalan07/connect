@@ -7,6 +7,7 @@ import {
   getDoc,
   getDocs,
   limit as limitTo,
+  onSnapshot,
   orderBy,
   query,
   runTransaction,
@@ -60,6 +61,7 @@ import type {
   VoteValue,
   VoteWrite
 } from './contentAdapter';
+import type { StreamHandlers, Unsubscribe } from './messagingAdapter';
 
 /**
  * Firestore doubt-domain adapter — the single production content backend.
@@ -1107,6 +1109,31 @@ export const firebaseContentAdapter: ContentAdapter = {
       .slice()
       .sort((a, b) => num(readSnapshot(b).createdAtMs) - num(readSnapshot(a).createdAtMs))
       .map(item => toNotification(readSnapshot(item), item.id));
+  },
+
+  subscribeToNotifications(
+    actorId: string,
+    handlers: StreamHandlers<Notification[]>
+  ): Unsubscribe {
+    // Same shape as `listNotifications` on purpose: `userId ==` alone runs on
+    // Firestore's automatic single-field index, and the newest-first ordering
+    // is applied here. Adding `orderBy('createdAtMs', 'desc')` to the query
+    // would demand a composite index this collection does not have.
+    const reference = query(collection(db(), NOTIFICATIONS), where('userId', '==', actorId));
+    return onSnapshot(
+      reference,
+      // Same latency-compensation rationale as the messaging streams: real
+      // writes immediately, silent on cache-only refreshes.
+      { includeMetadataChanges: false },
+      snapshot =>
+        handlers.onData(
+          snapshot.docs
+            .slice()
+            .sort((a, b) => num(readSnapshot(b).createdAtMs) - num(readSnapshot(a).createdAtMs))
+            .map(item => toNotification(readSnapshot(item), item.id))
+        ),
+      handlers.onError
+    );
   },
 
   async createNotification(notification: Notification): Promise<Notification> {

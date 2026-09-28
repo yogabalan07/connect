@@ -2,9 +2,11 @@ import {
   collection,
   deleteDoc,
   doc,
+  getCountFromServer,
   getDoc,
   getDocs,
   limit as limitTo,
+  onSnapshot,
   orderBy,
   query,
   setDoc,
@@ -16,7 +18,14 @@ import type { CollectionReference, DocumentData, QueryDocumentSnapshot } from 'f
 import { getFirebaseDb } from '../lib/firebase';
 import { relativeTime } from '../lib/time';
 import type { CodeSnippet, Message } from '../types';
-import { conversationIdFor, type ConversationRecord, type MessageDraft, type MessagingAdapter } from './messagingAdapter';
+import {
+  conversationIdFor,
+  type ConversationRecord,
+  type MessageDraft,
+  type MessagingAdapter,
+  type StreamHandlers,
+  type Unsubscribe
+} from './messagingAdapter';
 
 /**
  * Firestore messaging adapter - the production backend for direct messages.
@@ -37,6 +46,11 @@ import { conversationIdFor, type ConversationRecord, type MessageDraft, type Mes
  * Read ordering is applied here rather than with a composite `orderBy`,
  * which keeps the `array-contains` / `==` queries on the automatic single
  * field indexes.
+ *
+ * Realtime: `subscribeTo*` wraps `onSnapshot` over the *same* queries as the
+ * one-shot reads, so a listener obeys the identical `firestore.rules` checks
+ * and the identical index footprint. The Firebase SDK never leaks past this
+ * file - `messageService` only ever sees `Unsubscribe` callbacks.
  */
 const CONVERSATIONS = 'conversations';
 const CONVERSATION_READS = 'conversationReads';
@@ -113,8 +127,22 @@ export const firebaseMessagingAdapter: MessagingAdapter = {
   async ensureConversation(actorId: string, peerId: string): Promise<ConversationRecord> {
     const id = conversationIdFor(actorId, peerId);
     const reference = doc(db(), CONVERSATIONS, id);
-    const existing = await getDoc(reference);
-    if (existing.exists()) return toConversationRecord(existing.data(), existing.id);
+
+    // Reading a thread that does not exist yet is DENIED, not reported as
+    // "not found": `threadMember()` cannot test membership against a document
+    // that is not there, and the rules engine refuses rather than guessing.
+    // That refusal is therefore this method's signal that the pair has no
+    // thread yet - it is not an error, it is the whole point of the call.
+    // A genuine permission problem still surfaces, because the create below
+    // is refused for exactly the same reason.
+    let existing: ConversationRecord | null = null;
+    try {
+      const snapshot = await getDoc(reference);
+      if (snapshot.exists()) existing = toConversationRecord(snapshot.data(), snapshot.id);
+    } catch {
+      existing = null;
+    }
+    if (existing) return existing;
 
     const now = Date.now();
     const payload: DocumentData = {
@@ -207,17 +235,21 @@ export const firebaseMessagingAdapter: MessagingAdapter = {
   async markConversationRead(conversationId: string, actorId: string, atMs: number): Promise<number> {
     const id = `${conversationId}_${actorId}`;
     const reference = doc(db(), CONVERSATION_READS, id);
-    const existing = await getDoc(reference);
 
-    if (!existing.exists()) {
+    // One write instead of read-then-write: the rules already refuse a receipt
+    // that would move backwards, so the client never has to read a document
+    // that does not exist yet (and cannot be read until it does).
+    try {
       await setDoc(reference, { id, conversationId, userId: actorId, lastReadAtMs: atMs });
       return atMs;
+    } catch (error) {
+      // Either the write would rewind the cursor, or the caller has no business
+      // in this thread. An existing receipt is mine to read, so the real value
+      // is available in the first case and the original error is rethrown.
+      const existing = await getDoc(reference);
+      if (!existing.exists()) throw error;
+      return num(existing.data().lastReadAtMs);
     }
-
-    const current = num(existing.data().lastReadAtMs);
-    const next = Math.max(current, atMs);
-    if (next !== current) await updateDoc(reference, { lastReadAtMs: next });
-    return next;
   },
 
   async deleteMessage(conversationId: string, messageId: string): Promise<void> {
@@ -236,6 +268,78 @@ export const firebaseMessagingAdapter: MessagingAdapter = {
       if (snapshot.size < BATCH_SIZE) break;
     }
     await deleteDoc(doc(db(), CONVERSATIONS, conversationId));
+  },
+
+  // ---------------------------------------------------------- realtime
+  subscribeToConversations(
+    actorId: string,
+    handlers: StreamHandlers<ConversationRecord[]>
+  ): Unsubscribe {
+    const reference = query(
+      collection(db(), CONVERSATIONS),
+      where('participants', 'array-contains', actorId)
+    );
+    return onSnapshot(
+      reference,
+      // Latency compensation is exactly what we want: a local send shows up
+      // in the sender's own list at once, then the server confirms it.
+      // Cache-only metadata changes (a re-read from disk) carry no new data
+      // for a query this small, so they are deliberately not delivered -
+      // that keeps the recompute work proportional to real activity.
+      { includeMetadataChanges: false },
+      snapshot => handlers.onData(snapshot.docs.map(item => toConversationRecord(item.data(), item.id))),
+      handlers.onError
+    );
+  },
+
+  subscribeToReadCursors(
+    actorId: string,
+    handlers: StreamHandlers<Record<string, number>>
+  ): Unsubscribe {
+    const reference = query(
+      collection(db(), CONVERSATION_READS),
+      where('userId', '==', actorId),
+      limitTo(MAX_CURSORS)
+    );
+    return onSnapshot(
+      reference,
+      { includeMetadataChanges: false },
+      snapshot => {
+        const cursors: Record<string, number> = {};
+        snapshot.docs.forEach(item => {
+          cursors[str(item.id)] = num(item.data().lastReadAtMs);
+        });
+        handlers.onData(cursors);
+      },
+      handlers.onError
+    );
+  },
+
+  subscribeToMessages(
+    conversationId: string,
+    handlers: StreamHandlers<Message[]>
+  ): Unsubscribe {
+    const reference = query(
+      messagesRef(conversationId),
+      orderBy('createdAtMs', 'asc'),
+      limitTo(MAX_MESSAGES)
+    );
+    return onSnapshot(
+      reference,
+      { includeMetadataChanges: false },
+      // The snapshot is the whole window in order, so sorting it here and
+      // replacing the view wholesale is both duplicate-proof and delete-aware
+      // - a document removed by its author simply stops appearing.
+      snapshot => handlers.onData(snapshot.docs.map(toMessage).sort((a, b) => a.createdAtMs - b.createdAtMs)),
+      handlers.onError
+    );
+  },
+
+  async countMessagesSince(conversationId: string, sinceMs: number): Promise<number> {
+    const snapshot = await getCountFromServer(
+      query(messagesRef(conversationId), where('createdAtMs', '>', sinceMs))
+    );
+    return snapshot.data().count;
   }
 };
 

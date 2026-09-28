@@ -27,6 +27,7 @@ import type {
   UserVotes,
   VoteWrite
 } from '../contentAdapter';
+import type { StreamHandlers, Unsubscribe } from '../messagingAdapter';
 
 /**
  * In-memory `ContentAdapter` double.
@@ -58,6 +59,10 @@ export interface FakeContentAdapter extends ContentAdapter {
   badgeDefinitions(): BadgeDefinition[];
   /** Forces every call to fail with Firestore's `permission-denied` code. */
   setDenied(denied: boolean): void;
+  /** Number of notification streams currently subscribed (leak check). */
+  activeStreamCount(): number;
+  /** Delivers an error to every live stream (connectivity-failure tests). */
+  failStreams(error: unknown): void;
   reset(): void;
   readonly calls: Record<string, number>;
 }
@@ -118,6 +123,7 @@ const METHODS = [
   'listTags',
   'createTag',
   'listNotifications',
+  'subscribeToNotifications',
   'createNotification',
   'markNotificationRead',
   'markAllNotificationsRead'
@@ -154,6 +160,53 @@ export function createFakeContentAdapter(): FakeContentAdapter {
     calls[name] = (calls[name] ?? 0) + 1;
     if (denyAll) throw denied();
   };
+
+  /** Live notification subscriptions - kept so tests can assert teardown. */
+  const notificationStreams: Array<{
+    actorId: string;
+    onData: (items: Notification[]) => void;
+    onError: (error: unknown) => void;
+  }> = [];
+
+  /**
+   * Subscribes to one member's notifications. The initial snapshot is
+   * delivered on a microtask, mirroring how Firestore's first `onSnapshot`
+   * always lands asynchronously rather than during the call itself.
+   */
+  function openNotifications(actorId: string, handlers: StreamHandlers<Notification[]>): Unsubscribe {
+    count('subscribeToNotifications');
+    let active = true;
+    const stream = {
+      actorId,
+      onData: (items: Notification[]) => handlers.onData(items),
+      onError: (error: unknown) => handlers.onError(error)
+    };
+    notificationStreams.push(stream);
+    queueMicrotask(() => {
+      if (!active) return;
+      if (denyAll) {
+        stream.onError(denied());
+        return;
+      }
+      stream.onData(adapter.notificationsFor(actorId).map(item => ({ ...item })));
+    });
+    return () => {
+      if (!active) return;
+      active = false;
+      const index = notificationStreams.indexOf(stream);
+      if (index >= 0) notificationStreams.splice(index, 1);
+    };
+  }
+
+  /** Pushes the current truth to every live stream for `actorId`. */
+  function emitNotifications(actorId: string): void {
+    if (denyAll) return;
+    const items = adapter.notificationsFor(actorId).map(item => ({ ...item }));
+    notificationStreams
+      .slice()
+      .filter(stream => stream.actorId === actorId)
+      .forEach(stream => stream.onData(items));
+  }
 
   const answersOf = (doubtId: string): Answer[] =>
     Array.from(store.answers.values()).filter(answer => answer.doubtId === doubtId);
@@ -254,9 +307,18 @@ export function createFakeContentAdapter(): FakeContentAdapter {
       denyAll = denied;
     },
 
+    activeStreamCount(): number {
+      return notificationStreams.length;
+    },
+
+    failStreams(error: unknown): void {
+      notificationStreams.slice().forEach(stream => stream.onError(error));
+    },
+
     reset(): void {
       denyAll = false;
       for (const method of METHODS) calls[method] = 0;
+      notificationStreams.splice(0, notificationStreams.length);
       store.doubts.clear();
       store.answers.clear();
       store.comments.clear();
@@ -703,10 +765,15 @@ export function createFakeContentAdapter(): FakeContentAdapter {
       return adapter.notificationsFor(actorId).map(item => ({ ...item }));
     },
 
+    subscribeToNotifications(actorId: string, handlers: StreamHandlers<Notification[]>): Unsubscribe {
+      return openNotifications(actorId, handlers);
+    },
+
     async createNotification(notification: Notification): Promise<Notification> {
       count('createNotification');
       const created: Notification = { ...notification, id: nextId('notif') };
       store.notifications.set(created.id, created);
+      emitNotifications(created.userId);
       return { ...created };
     },
 
@@ -715,14 +782,20 @@ export function createFakeContentAdapter(): FakeContentAdapter {
       const existing = store.notifications.get(id);
       if (!existing) throw notFound();
       store.notifications.set(id, { ...existing, read: true });
+      emitNotifications(existing.userId);
     },
 
     async markAllNotificationsRead(_actorId: string, ids: string[]): Promise<void> {
       count('markAllNotificationsRead');
+      const touched = new Set<string>();
       for (const id of ids) {
         const existing = store.notifications.get(id);
-        if (existing) store.notifications.set(id, { ...existing, read: true });
+        if (existing) {
+          store.notifications.set(id, { ...existing, read: true });
+          touched.add(existing.userId);
+        }
       }
+      touched.forEach(userId => emitNotifications(userId));
     }
   };
 

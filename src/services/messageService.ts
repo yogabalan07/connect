@@ -6,7 +6,8 @@ import { mapFirestoreError } from './firestoreErrors';
 import {
   conversationIdFor,
   getMessagingAdapter,
-  type ConversationRecord
+  type ConversationRecord,
+  type Unsubscribe
 } from './messagingAdapter';
 import { userService } from './userService';
 
@@ -18,6 +19,10 @@ interface MessageState {
   /** `records` projected with peers resolved and unread derived. */
   conversations: Conversation[];
   messages: Message[];
+  /** `{conversationId: messages waiting for me}` - exact, never guessed. */
+  unread: Record<string, number>;
+  /** Sum of `unread`, so the app can badge the inbox as a whole. */
+  totalUnread: number;
   activeConversationId: string | null;
   status: LoadStatus;
   error?: string;
@@ -28,6 +33,8 @@ const EMPTY_STATE: MessageState = {
   cursors: {},
   conversations: [],
   messages: [],
+  unread: {},
+  totalUnread: 0,
   activeConversationId: null,
   status: 'loading'
 };
@@ -37,6 +44,21 @@ const store = createStore<MessageState>(EMPTY_STATE);
 let actorId: string | null = null;
 let directorySnapshot: User[] = [];
 let unsubscribedFromDirectory = false;
+
+/**
+ * Exactly one live listener per scope. A conversation switch first tears the
+ * previous thread down, then subscribes - so there is structurally no way to
+ * end up with two listeners fighting over the same message list.
+ */
+let stopListListeners: Unsubscribe | null = null;
+let stopMessageListener: Unsubscribe | null = null;
+let listeningTo: string | null = null;
+
+/** Threads whose history has arrived this session (enables a local count). */
+const loadedConversations = new Set<string>();
+/** `{conversationId: {key, count}}` - one count per cursor/activity pair. */
+const unreadCache = new Map<string, { key: string; count: number }>();
+const unreadInFlight = new Set<string>();
 
 function readCursor(cursors: Record<string, number>, id: string): number {
   return cursors[id] ?? 0;
@@ -67,37 +89,101 @@ function toConversation(
   record: ConversationRecord,
   uid: string,
   cursors: Record<string, number>,
-  directory: User[]
+  directory: User[],
+  unreadCount: number
 ): Conversation {
   const peerId = record.participants.find(id => id !== uid) ?? '';
-  const lastReadAtMs = readCursor(cursors, record.id);
-  // Unread only when someone else spoke after my own cursor - I can never
-  // make my own thread look unread, and a cursor only ever moves forward.
-  const incoming = record.lastMessageAtMs > lastReadAtMs && record.lastMessageSenderId !== uid;
 
   return {
     id: record.id,
     participants: record.participants,
     participant: directory.find(user => user.id === peerId) ?? null,
     lastMessage: lastMessageOf(record, peerId),
-    unreadCount: incoming ? 1 : 0,
+    unreadCount,
     lastMessageAtMs: record.lastMessageAtMs,
-    lastReadAtMs
+    lastReadAtMs: readCursor(cursors, record.id)
   };
+}
+
+/**
+ * How many messages in `record` are still waiting for `uid`.
+ *
+ * Three cases, in order of cost:
+ *  1. nothing after my cursor, or I spoke last -> `0` (sending can never
+ *     make my own thread look unread, and `send` moves my cursor past my
+ *     own message in the same round trip);
+ *  2. the thread is already on screen -> counted locally from the history
+ *     the listener holds, so the badge is exact and instant;
+ *  3. otherwise -> one bounded Firestore count query, cached against the
+ *     exact `(cursor, lastMessageAtMs)` pair that produced it. Reading the
+ *     whole thread would be the expensive alternative; this stays a single
+ *     aggregate and only re-runs when something actually moved.
+ */
+function unreadFor(
+  record: ConversationRecord,
+  uid: string,
+  cursors: Record<string, number>,
+  messages: Message[]
+): number {
+  const cursor = readCursor(cursors, record.id);
+  if (record.lastMessageAtMs <= cursor) return 0;
+  if (record.lastMessageSenderId === uid) return 0;
+
+  if (loadedConversations.has(record.id)) {
+    return messages.filter(
+      message =>
+        message.conversationId === record.id &&
+        message.createdAtMs > cursor &&
+        message.senderId !== uid
+    ).length;
+  }
+
+  const key = `${cursor}|${record.lastMessageAtMs}`;
+  const cached = unreadCache.get(record.id);
+  if (cached && cached.key === key) return cached.count;
+  scheduleUnreadCount(record.id, cursor, key);
+  // While the aggregate is in flight the activity itself already proves at
+  // least one unread message, so the badge never flickers back to zero.
+  return cached ? cached.count : 1;
+}
+
+function scheduleUnreadCount(conversationId: string, cursor: number, key: string): void {
+  const token = `${conversationId}|${key}`;
+  if (unreadInFlight.has(token)) return;
+  unreadInFlight.add(token);
+  getMessagingAdapter()
+    .countMessagesSince(conversationId, cursor)
+    .then(count => {
+      unreadCache.set(conversationId, { key, count });
+    })
+    .catch(() => {
+      // A refused aggregate keeps the optimistic `1` from `unreadFor`; the
+      // inbox stays usable and the badge stays honest about "something is
+      // new" rather than inventing a number.
+    })
+    .finally(() => {
+      unreadInFlight.delete(token);
+      if (actorId) recompute();
+    });
 }
 
 /** Re-derives `conversations` from records + cursors + the user directory. */
 function recompute(): void {
   const uid = actorId;
   if (!uid) return;
-  const { records, cursors } = store.get();
+  const { records, cursors, messages } = store.get();
   const directory = directorySnapshot;
-  store.set(prev => ({
-    ...prev,
-    records,
-    cursors,
-    conversations: records.map(record => toConversation(record, uid, cursors, directory))
-  }));
+  const unread: Record<string, number> = {};
+  let totalUnread = 0;
+
+  const conversations = records.map(record => {
+    const count = unreadFor(record, uid, cursors, messages);
+    unread[record.id] = count;
+    totalUnread += count;
+    return toConversation(record, uid, cursors, directory, count);
+  });
+
+  store.set(prev => ({ ...prev, records, cursors, unread, totalUnread, conversations }));
 }
 
 function rememberRecords(records: ConversationRecord[]): void {
@@ -123,6 +209,128 @@ function upsertRecord(record: ConversationRecord): void {
   rememberRecords(next);
 }
 
+/** Replaces one thread's history wholesale - adds, edits and deletes alike. */
+function applyMessages(conversationId: string, incoming: Message[]): void {
+  store.set(prev => ({
+    ...prev,
+    messages: [...prev.messages.filter(message => message.conversationId !== conversationId), ...incoming]
+  }));
+  recompute();
+}
+
+/**
+ * Optimistic local echo for a message we just wrote: merged by id so the
+ * same document can arrive from the write *and* the listener without ever
+ * rendering twice.
+ */
+function mergeIntoConversation(conversationId: string, incoming: Message[]): void {
+  store.set(prev => {
+    const byId = new Map<string, Message>();
+    prev.messages
+      .filter(message => message.conversationId === conversationId)
+      .forEach(message => byId.set(message.id, message));
+    incoming.forEach(message => byId.set(message.id, message));
+    const bucket = Array.from(byId.values()).sort((a, b) => a.createdAtMs - b.createdAtMs);
+    return {
+      ...prev,
+      messages: [...prev.messages.filter(message => message.conversationId !== conversationId), ...bucket]
+    };
+  });
+  recompute();
+}
+
+/**
+ * A stream failure. The last good snapshot stays on screen: a dropped
+ * connection must not blank an inbox somebody is reading. The typed message
+ * is recorded and exposed (never swallowed), and only a failure that
+ * happened before any data arrived promotes the store to `error`.
+ */
+function onStreamError(error: unknown): void {
+  const mapped = mapFirestoreError(error);
+  store.set(prev => ({
+    ...prev,
+    status: prev.status === 'loading' ? 'error' : prev.status,
+    error: mapped.message
+  }));
+}
+
+function stopRealtime(): void {
+  if (stopListListeners) stopListListeners();
+  stopListListeners = null;
+  if (stopMessageListener) stopMessageListener();
+  stopMessageListener = null;
+  listeningTo = null;
+  loadedConversations.clear();
+  unreadCache.clear();
+  unreadInFlight.clear();
+}
+
+/**
+ * Subscribes to one thread, replacing whatever was open before.
+ *
+ * The `listeningTo` check is the duplicate guard: clicking the same row
+ * twice, or React re-running a mount effect, must not stack a second
+ * listener on a conversation that is already streaming.
+ */
+function listenToMessages(conversationId: string): void {
+  if (listeningTo === conversationId && stopMessageListener) return;
+
+  if (stopMessageListener) stopMessageListener();
+  stopMessageListener = null;
+  listeningTo = null;
+
+  const stop = getMessagingAdapter().subscribeToMessages(conversationId, {
+    onData: incoming => {
+      // Ignore a snapshot from a thread the user has already navigated away
+      // from: by the time it lands, `listeningTo` has moved on.
+      if (listeningTo !== conversationId) return;
+      loadedConversations.add(conversationId);
+      applyMessages(conversationId, incoming);
+    },
+    onError: error => {
+      if (listeningTo !== conversationId) return;
+      onStreamError(error);
+    }
+  });
+
+  listeningTo = conversationId;
+  stopMessageListener = stop;
+}
+
+/** Starts the inbox + read-receipt streams for `uid`, replacing any prior. */
+function startListListeners(uid: string): void {
+  if (stopListListeners) stopListListeners();
+  stopListListeners = null;
+
+  const adapter = getMessagingAdapter();
+  const stopConversations = adapter.subscribeToConversations(uid, {
+    onData: records => {
+      if (actorId !== uid) return;
+      rememberRecords(records);
+    },
+    onError: error => {
+      if (actorId !== uid) return;
+      onStreamError(error);
+    }
+  });
+  const stopCursors = adapter.subscribeToReadCursors(uid, {
+    onData: cursors => {
+      if (actorId !== uid) return;
+      store.set(prev => ({ ...prev, cursors }));
+      recompute();
+    },
+    onError: error => {
+      if (actorId !== uid) return;
+      onStreamError(error);
+    }
+  });
+
+  stopListListeners = () => {
+    stopConversations();
+    stopCursors();
+  };
+}
+
 /**
  * Direct messaging.
  *
@@ -131,22 +339,34 @@ function upsertRecord(record: ConversationRecord): void {
  * each member's own read cursor in `conversationReads/{a_b}_{uid}`. The
  * document id *is* the duplicate guard, so "start a new conversation" is
  * idempotent by construction rather than by a read-then-write race.
+ *
+ * Realtime: `loadAll` opens two streams for the session (conversation list
+ * and my read receipts) and `open` opens exactly one message stream, which
+ * it replaces on every switch. There is no polling anywhere - every update
+ * arrives as a Firestore `onSnapshot` callback delivered by the adapter.
  */
 export const messageService = {
   store,
 
   bootstrap(): void {
+    stopRealtime();
     actorId = null;
     directorySnapshot = [];
     store.set({ ...EMPTY_STATE });
   },
 
   /**
-   * Reads conversations + the actor's read cursors for this session.
+   * Reads conversations + the actor's read cursors for this session, then
+   * leaves both streams open so the list keeps moving on its own.
    * Callers must be signed in: the rules only let an approved member list
    * threads they belong to.
    */
   async loadAll(uid: string): Promise<void> {
+    // A re-login (or a second `loadAll` in one session) must not stack a
+    // second pair of listeners on the same queries.
+    if (stopListListeners) stopListListeners();
+    stopListListeners = null;
+
     actorId = uid;
     // Snapshot the directory as it stands right now: the subscription below
     // only fires on *subsequent* directory updates, so a directory that
@@ -162,6 +382,7 @@ export const messageService = {
       store.set(prev => ({ ...prev, records: sortRecords(records), cursors }));
       recompute();
       store.set(prev => ({ ...prev, status: 'ready', error: undefined }));
+      startListListeners(uid);
     } catch (error) {
       const mapped = mapFirestoreError(error);
       store.set(prev => ({ ...prev, status: 'error', error: mapped.message }));
@@ -190,19 +411,28 @@ export const messageService = {
     }
   },
 
-  /** Selects a conversation, loads its history and advances my read cursor. */
+  /**
+   * Selects a conversation and streams its history.
+   *
+   * There is no follow-up `listMessages`: the subscription's first snapshot
+   * already carries the whole window, so the thread is read exactly once
+   * instead of once per navigation.
+   */
   async open(conversationId: string): Promise<void> {
     store.set(prev => ({ ...prev, activeConversationId: conversationId }));
     try {
-      const messages = await getMessagingAdapter().listMessages(conversationId);
-      store.set(prev => ({
-        ...prev,
-        messages: mergeMessages(prev.messages, messages)
-      }));
-      await messageService.markRead(conversationId);
+      listenToMessages(conversationId);
     } catch (error) {
       throw mapFirestoreError(error);
     }
+    await messageService.markRead(conversationId);
+  },
+
+  /** Stops the thread stream without touching the inbox streams. */
+  stopListening(): void {
+    if (stopMessageListener) stopMessageListener();
+    stopMessageListener = null;
+    listeningTo = null;
   },
 
   /**
@@ -259,7 +489,7 @@ export const messageService = {
         lastMessageSenderId: message.senderId,
         lastMessagePreview: trimmed.replace(/\s+/g, ' ').slice(0, 200)
       });
-      store.set(prev => ({ ...prev, messages: mergeMessages(prev.messages, [message]) }));
+      mergeIntoConversation(conversationId, [message]);
       await messageService.markRead(conversationId);
       store.set(prev => ({ ...prev, activeConversationId: conversationId }));
       return message;
@@ -270,24 +500,28 @@ export const messageService = {
 
   setActiveConversation(id: string | null): void {
     store.set(prev => ({ ...prev, activeConversationId: id }));
+    // Nothing is on screen any more: drop the thread stream but keep the
+    // inbox streams so badges still move in the background.
+    if (!id) messageService.stopListening();
   },
 
   /** Test/diagnostic view of the stored read cursors. */
   getReadCursors(): Record<string, number> {
     return { ...store.get().cursors };
+  },
+
+  /** Diagnostic view of which streams are currently live. */
+  getLiveStreams(): string[] {
+    const streams: string[] = [];
+    if (stopListListeners) streams.push('conversations', 'cursors');
+    if (listeningTo) streams.push(`messages:${listeningTo}`);
+    return streams;
   }
 };
 
 function requireActor(): string {
   if (!actorId) throw new ServiceError('auth/required', 'Sign in to message another member.');
   return actorId;
-}
-
-function mergeMessages(existing: Message[], incoming: Message[]): Message[] {
-  const byId = new Map<string, Message>();
-  existing.forEach(message => byId.set(message.id, message));
-  incoming.forEach(message => byId.set(message.id, message));
-  return Array.from(byId.values()).sort((a, b) => a.createdAtMs - b.createdAtMs);
 }
 
 /**

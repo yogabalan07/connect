@@ -3,6 +3,7 @@ import { createStore, LoadStatus, useStore } from '../lib/store';
 import { getContentAdapter } from './contentAdapter';
 import { mapFirestoreError } from './firestoreErrors';
 import { requireServiceActor } from './actor';
+import type { Unsubscribe } from './messagingAdapter';
 
 interface NotificationState {
   notifications: Notification[];
@@ -16,12 +17,54 @@ const store = createStore<NotificationState>({
   error: undefined
 });
 
+/** Live stream for one member - never more than one at a time. */
+let stopNotifications: Unsubscribe | null = null;
+let subscribedTo: string | null = null;
+
 async function viaAdapter<T>(task: () => Promise<T>): Promise<T> {
   try {
     return await task();
   } catch (error) {
     throw mapFirestoreError(error);
   }
+}
+
+/** Drops the current stream (if any) without touching the feed on screen. */
+function stopNotificationsStream(): void {
+  if (stopNotifications) stopNotifications();
+  stopNotifications = null;
+  subscribedTo = null;
+}
+
+/**
+ * Opens the notification stream for `uid`, replacing any previous one.
+ *
+ * The `subscribedTo` check is the duplicate guard: a re-run mount effect or
+ * a second `loadAll` for the same member must not stack listeners.
+ */
+function startNotificationsStream(uid: string): void {
+  if (subscribedTo === uid && stopNotifications) return;
+  stopNotificationsStream();
+  const stop = getContentAdapter().subscribeToNotifications(uid, {
+    onData: notifications => {
+      if (subscribedTo !== uid) return;
+      store.set(prev => ({ ...prev, notifications, status: 'ready', error: undefined }));
+    },
+    onError: error => {
+      if (subscribedTo !== uid) return;
+      // A dropped connection keeps the last feed on screen rather than
+      // clearing it; only a failure with nothing loaded yet reads as an error
+      // state, and the typed message is always recorded.
+      const mapped = mapFirestoreError(error);
+      store.set(prev => ({
+        ...prev,
+        status: prev.status === 'loading' ? 'error' : prev.status,
+        error: mapped.message
+      }));
+    }
+  });
+  subscribedTo = uid;
+  stopNotifications = stop;
 }
 
 /**
@@ -57,18 +100,29 @@ export const notificationService = {
   store,
 
   bootstrap(): void {
+    stopNotificationsStream();
     store.set(prev => ({ ...prev, status: 'loading', error: undefined }));
   },
 
+  /**
+   * Reads the member's notifications once, then leaves the stream open so
+   * new events arrive without a refetch.
+   */
   async loadAll(actorId?: string): Promise<void> {
     const uid = actorId ?? requireServiceActor();
     try {
       const notifications = await viaAdapter(() => getContentAdapter().listNotifications(uid));
       store.set(prev => ({ ...prev, notifications, status: 'ready', error: undefined }));
+      startNotificationsStream(uid);
     } catch (error) {
       const mapped = mapFirestoreError(error);
       store.set(prev => ({ ...prev, status: 'error', error: mapped.message }));
     }
+  },
+
+  /** Stops the notification stream (logout / navigation teardown). */
+  stopListening(): void {
+    stopNotificationsStream();
   },
 
   getAll(): Notification[] {
@@ -84,7 +138,12 @@ export const notificationService = {
         id: '',
         timestamp: notification.timestamp || 'Just now'
       });
-      store.set(prev => ({ ...prev, notifications: [created, ...prev.notifications] }));
+      store.set(prev => ({
+        ...prev,
+        // Dedupe by id: the adapter's stream may already have delivered this
+        // document before the write resolved, and it must not show twice.
+        notifications: [created, ...prev.notifications.filter(item => item.id !== created.id)]
+      }));
       return created;
     } catch (error) {
       throw mapFirestoreError(error);
@@ -292,5 +351,6 @@ export function useNotificationsStore(): NotificationState {
 
 /** Test seam: empties the notification feed without touching the adapter. */
 export function resetNotificationStoreForTests(): void {
+  stopNotificationsStream();
   store.set({ notifications: [], status: 'loading', error: undefined });
 }

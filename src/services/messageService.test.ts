@@ -56,6 +56,22 @@ function seedIncoming(from = bob): void {
       lastMessagePreview: 'did you finish the lab?'
     }
   ]);
+  // A thread never carries `lastMessageAtMs` without the document that
+  // produced it - `sendMessage` writes both in one batch - so the fixture
+  // seeds the message too. Unread is counted off the real history, and a
+  // summary with nothing behind it would count as nothing.
+  fake.seedMessages([
+    {
+      id: 'msg_incoming_1',
+      conversationId: PAIR,
+      senderId: from.id,
+      receiverId: from.id === alice.id ? bob.id : alice.id,
+      text: 'did you finish the lab?',
+      timestamp: 'now',
+      createdAtMs: 5_000,
+      read: false
+    }
+  ]);
 }
 
 describe('conversation identity', () => {
@@ -235,5 +251,166 @@ describe('failures', () => {
       messages: [],
       activeConversationId: null
     });
+  });
+});
+
+const CAROL_PAIR = 'uid_alice_uid_carol';
+
+/** Lets the fake's promise chains (and Firestore's first snapshot) land. */
+function flush(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+describe('realtime streams', () => {
+  it('moves the conversation list from the live stream, never a refetch', async () => {
+    seedIncoming();
+    await messageService.loadAll(alice.id);
+    const reads = fake.calls.listConversations;
+
+    await fake.sendMessage({
+      conversationId: PAIR,
+      senderId: bob.id,
+      receiverId: alice.id,
+      text: 'are you up?'
+    });
+
+    expect(fake.calls.listConversations).toBe(reads);
+    expect(messageService.store.get().conversations[0].lastMessage?.text).toBe('are you up?');
+  });
+
+  it('streams a peer message into the open thread without ever listing', async () => {
+    seedIncoming();
+    await messageService.loadAll(alice.id);
+    await messageService.open(PAIR);
+    // History arrives on the subscription's first snapshot: the one-shot
+    // `listMessages` read is gone from the path entirely.
+    expect(fake.calls.listMessages ?? 0).toBe(0);
+
+    await fake.sendMessage({
+      conversationId: PAIR,
+      senderId: bob.id,
+      receiverId: alice.id,
+      text: 'second one'
+    });
+
+    expect(fake.calls.listMessages ?? 0).toBe(0);
+    expect(
+      messageService.store.get()
+        .messages.filter(message => message.conversationId === PAIR)
+        .map(message => message.text)
+    ).toEqual(['did you finish the lab?', 'second one']);
+  });
+
+  it('opens one message stream no matter how often the thread is selected', async () => {
+    seedIncoming();
+    await messageService.loadAll(alice.id);
+
+    await messageService.open(PAIR);
+    await messageService.open(PAIR);
+    await messageService.startConversation(bob.id);
+
+    expect(fake.activeStreams().filter(stream => stream.kind === 'messages')).toEqual([
+      { kind: 'messages', key: PAIR }
+    ]);
+    expect(messageService.getLiveStreams()).toEqual([
+      'conversations',
+      'cursors',
+      `messages:${PAIR}`
+    ]);
+  });
+
+  it('replaces the previous thread stream when switching instead of stacking', async () => {
+    seedIncoming();
+    fake.seedConversations([
+      {
+        id: CAROL_PAIR,
+        participants: [alice.id, carol.id],
+        createdAtMs: 1_000,
+        updatedAtMs: 3_000,
+        lastMessageAtMs: 4_000,
+        lastMessageSenderId: carol.id,
+        lastMessagePreview: 'yo'
+      }
+    ]);
+    await messageService.loadAll(alice.id);
+
+    await messageService.open(PAIR);
+    await messageService.open(CAROL_PAIR);
+
+    expect(fake.activeStreams().filter(stream => stream.kind === 'messages')).toEqual([
+      { kind: 'messages', key: CAROL_PAIR }
+    ]);
+  });
+
+  it('ignores a snapshot for a thread the user has already left', async () => {
+    seedIncoming();
+    fake.seedConversations([
+      {
+        id: CAROL_PAIR,
+        participants: [alice.id, carol.id],
+        createdAtMs: 1_000,
+        updatedAtMs: 3_000,
+        lastMessageAtMs: 4_000,
+        lastMessageSenderId: carol.id,
+        lastMessagePreview: 'yo'
+      }
+    ]);
+    await messageService.loadAll(alice.id);
+    await messageService.open(PAIR);
+    await messageService.open(CAROL_PAIR);
+
+    await fake.sendMessage({
+      conversationId: PAIR,
+      senderId: bob.id,
+      receiverId: alice.id,
+      text: 'too late for this thread'
+    });
+
+    expect(
+      messageService.store.get().messages.some(message => message.text === 'too late for this thread')
+    ).toBe(false);
+  });
+
+  it('raises the unread badge when a peer speaks in a thread nobody has open', async () => {
+    seedIncoming();
+    await messageService.loadAll(alice.id);
+    expect(messageService.store.get().conversations[0].unreadCount).toBe(1);
+    expect(messageService.store.get().totalUnread).toBe(1);
+
+    await fake.sendMessage({
+      conversationId: PAIR,
+      senderId: bob.id,
+      receiverId: alice.id,
+      text: 'and one more'
+    });
+    await flush();
+
+    expect(messageService.store.get().conversations[0].unreadCount).toBe(2);
+    expect(messageService.store.get().totalUnread).toBe(2);
+  });
+
+  it('leaves the last snapshot on screen when a stream fails', async () => {
+    seedIncoming();
+    await messageService.loadAll(alice.id);
+    expect(messageService.store.get().status).toBe('ready');
+
+    fake.failStreams(new Error('connection lost'));
+
+    const state = messageService.store.get();
+    expect(state.status).toBe('ready');
+    expect(state.conversations).toHaveLength(1);
+    expect(state.error).toBeTruthy();
+  });
+
+  it('tears every stream down on bootstrap so a logout leaks nothing', async () => {
+    seedIncoming();
+    await messageService.loadAll(alice.id);
+    await messageService.open(PAIR);
+    expect(fake.activeStreamCount()).toBe(3);
+
+    messageService.bootstrap();
+
+    expect(fake.activeStreamCount()).toBe(0);
+    expect(messageService.getLiveStreams()).toEqual([]);
   });
 });

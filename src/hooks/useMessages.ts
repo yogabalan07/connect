@@ -47,7 +47,17 @@ export function useMessages() {
     messages: state.messages,
     activeConversationId: state.activeConversationId,
     status: state.status,
+    /** Last realtime failure, if any - surfaced rather than swallowed. */
+    error: state.error,
+    /** `{conversationId: unread}` straight off the live cursors. */
+    unread: state.unread,
+    /** Sum of `unread`, for the inbox badge. */
+    totalUnread: state.totalUnread,
     setActiveConversationId: messageService.setActiveConversation,
+    /** Drops the open thread's stream (leaving the inbox streams alone). */
+    stopListening: messageService.stopListening,
+    /** Diagnostic: which streams are currently subscribed. */
+    liveStreams: messageService.getLiveStreams,
     sendMessage,
     startConversation,
     openConversation
