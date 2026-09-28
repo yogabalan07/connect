@@ -39,7 +39,7 @@ export const Navbar: React.FC = () => {
               </div>
               <div className="flex flex-col">
                 <span className="text-base font-extrabold tracking-tight text-white group-hover:text-indigo-300 transition-colors">
-                  Campus Doubt Hub
+                  Connect
                 </span>
                 <span className="text-[10px] font-medium text-slate-400 tracking-wide uppercase">
                   Academic Community

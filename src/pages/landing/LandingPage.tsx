@@ -90,7 +90,7 @@ export const LandingPage: React.FC = () => {
 
   const testimonials = [
     {
-      quote: "Campus Doubt Hub completely transformed our 3rd-year Operating Systems preparation. When I was stuck on Belady's Anomaly, Rahul and Prof. Ramesh replied within an hour with crystal clear proofs.",
+      quote: "Connect completely transformed our 3rd-year Operating Systems preparation. When I was stuck on Belady's Anomaly, Rahul and Prof. Ramesh replied within an hour with crystal clear proofs.",
       author: 'Ananya Iyer',
       role: '1st Year CSE',
       avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=120&auto=format&fit=crop&q=80'
@@ -119,7 +119,7 @@ export const LandingPage: React.FC = () => {
               <GraduationCap className="w-5 h-5 text-white" />
             </div>
             <span className="text-base font-extrabold tracking-tight text-white">
-              Campus Doubt Hub
+              Connect
             </span>
           </div>
 
@@ -228,7 +228,7 @@ export const LandingPage: React.FC = () => {
                   <span className="w-3 h-3 rounded-full bg-amber-500/80" />
                   <span className="w-3 h-3 rounded-full bg-emerald-500/80" />
                   <span className="ml-2 text-xs font-mono text-slate-400">
-                    campus-doubt-hub.internal/feed
+                    connect.internal/feed
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -362,7 +362,7 @@ export const LandingPage: React.FC = () => {
               Step-by-Step Workflow
             </span>
             <h2 className="mt-2 text-3xl sm:text-4xl font-extrabold text-white tracking-tight">
-              How Campus Doubt Hub Works
+              How Connect Works
             </h2>
             <p className="mt-3 text-sm text-slate-400">
               Clear your academic doubts in four intuitive steps designed specifically for college semesters.
@@ -538,7 +538,7 @@ export const LandingPage: React.FC = () => {
             <div className="w-7 h-7 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
               <GraduationCap className="w-4 h-4" />
             </div>
-            <span className="font-bold text-white text-sm">Campus Doubt Hub</span>
+            <span className="font-bold text-white text-sm">Connect</span>
           </div>
 
           <div className="flex flex-wrap items-center gap-6">
@@ -550,7 +550,7 @@ export const LandingPage: React.FC = () => {
           </div>
 
           <div className="text-slate-500">
-            © 2026 Campus Doubt Hub. Designed for College Students & Mentors.
+            © 2026 Connect. Designed for College Students & Mentors.
           </div>
         </div>
       </footer>

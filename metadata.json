@@ -1,6 +1,6 @@
 {
-  "name": "Campus Doubt Hub",
-  "description": "Modern college academic and technical doubt clearing community platform for students, seniors, and campus mentors.",
+  "name": "Connect",
+  "description": "Academic discussion platform where students, seniors, and mentors ask questions, share answers, and collaborate on coursework.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

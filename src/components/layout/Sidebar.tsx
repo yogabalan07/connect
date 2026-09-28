@@ -143,7 +143,7 @@ export const Sidebar: React.FC = () => {
           href="#help"
           onClick={e => {
             e.preventDefault();
-            alert('Campus Doubt Hub Help Center: Contact academic mentors or student welfare cell.');
+            alert('Connect Help Center: Contact academic mentors or student welfare cell.');
           }}
           className="flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-900/60 transition-colors"
         >

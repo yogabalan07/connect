@@ -64,7 +64,7 @@ export const RegisterPage: React.FC = () => {
             <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-sky-400 flex items-center justify-center text-white shadow-lg shadow-indigo-500/20">
               <GraduationCap className="w-5 h-5" />
             </div>
-            <span className="text-base font-extrabold text-white">Campus Doubt Hub</span>
+            <span className="text-base font-extrabold text-white">Connect</span>
           </Link>
           <h1 className="text-2xl font-bold text-white tracking-tight">Create Student Account</h1>
           <p className="mt-1 text-xs text-slate-400">

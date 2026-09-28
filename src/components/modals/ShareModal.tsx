@@ -33,7 +33,7 @@ export const ShareModal: React.FC<ShareModalProps> = ({ isOpen, onClose, title, 
   };
 
   const handleShareCampus = () => {
-    const text = `Hey, check this question on Campus Doubt Hub: "${title}" - ${fullUrl}`;
+    const text = `Hey, check this question on Connect: "${title}" - ${fullUrl}`;
     window.open(`https://api.whatsapp.com/send?text=${encodeURIComponent(text)}`, '_blank');
   };
 

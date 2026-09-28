@@ -67,7 +67,7 @@ export const AdminLayout: React.FC = () => {
                   </span>
                 </span>
                 <span className="text-[10px] text-slate-400">
-                  Campus Doubt Hub · HOD Administration
+                  Connect · HOD Administration
                 </span>
               </div>
             </div>

@@ -41,7 +41,7 @@ export const LoginPage: React.FC = () => {
               <GraduationCap className="w-5 h-5 text-white" />
             </div>
             <span className="text-lg font-extrabold tracking-tight text-white">
-              Campus Doubt Hub
+              Connect
             </span>
           </Link>
 
@@ -73,7 +73,7 @@ export const LoginPage: React.FC = () => {
         </div>
 
         <div className="text-xs text-slate-500 relative z-10">
-          © 2026 Campus Doubt Hub. Official College Knowledge Community.
+          © 2026 Connect. Official College Knowledge Community.
         </div>
       </div>
 
