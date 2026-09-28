@@ -30,9 +30,10 @@ export function useAdmin() {
   const [pendingUsers, setPendingUsers] = useState<User[]>([]);
   const actorId = actor?.id ?? null;
   const actorRole = actor?.role ?? null;
+  const adminKey = actorId && actorRole === 'admin' ? actorId : null;
 
   useEffect(() => {
-    if (!actorId || actorRole !== 'admin') return;
+    if (!adminKey) return;
     let cancelled = false;
     void userService
       .listPendingUsers()
@@ -43,19 +44,46 @@ export function useAdmin() {
     return () => {
       cancelled = true;
     };
-  }, [actorId, actorRole]);
+  }, [adminKey]);
+
+  /**
+   * Reads the moderator-only collections for this session.
+   *
+   * Only an admin may read `reports`, `announcements`, `auditLogs`,
+   * `warnings` and `adminSettings` - the rules refuse everyone else - so
+   * this runs behind the same guard as the pending queue instead of inside
+   * `loadContent`, where an ordinary member would produce four
+   * `permission-denied` errors on every login.
+   */
+  useEffect(() => {
+    if (!adminKey) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        await reportService.loadAll();
+        if (!cancelled) await adminService.loadAll();
+      } catch {
+        // Each store has already flipped to `error`; the pages render their
+        // own empty state from there.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [adminKey]);
 
   const approveUser = useCallback(
     async (userId: string): Promise<User> => {
       const target = userService.getById(userId);
       const updated = await userService.approveUser(userId);
-      adminService.logAudit({
-        actor: actor ? actor.name : 'System',
-        action: 'Approved student account',
-        target: target ? `${target.name} (${target.department})` : userId,
-        timestamp: 'Just now',
-        type: 'user'
-      });
+      if (actor) {
+        await adminService.logAuditSafely({
+          actor,
+          action: 'Approved student account',
+          target: target ? `${target.name} (${target.department})` : userId,
+          type: 'user'
+        });
+      }
       return updated;
     },
     [actor]
@@ -66,13 +94,14 @@ export function useAdmin() {
       const target = userService.getById(userId);
       const updated = await userService.rejectUser(userId);
       // Record is preserved as `rejected` for audit history — never deleted.
-      adminService.logAudit({
-        actor: actor ? actor.name : 'System',
-        action: 'Rejected student registration',
-        target: target ? target.email : userId,
-        timestamp: 'Just now',
-        type: 'user'
-      });
+      if (actor) {
+        await adminService.logAuditSafely({
+          actor,
+          action: 'Rejected student registration',
+          target: target ? target.email : userId,
+          type: 'user'
+        });
+      }
       return updated;
     },
     [actor]
@@ -82,13 +111,14 @@ export function useAdmin() {
     async (userId: string): Promise<User> => {
       const target = userService.getById(userId);
       const updated = await userService.blockUser(userId);
-      adminService.logAudit({
-        actor: actor ? actor.name : 'System',
-        action: 'Blocked account',
-        target: target ? target.name : userId,
-        timestamp: 'Just now',
-        type: 'moderation'
-      });
+      if (actor) {
+        await adminService.logAuditSafely({
+          actor,
+          action: 'Blocked account',
+          target: target ? target.name : userId,
+          type: 'moderation'
+        });
+      }
       return updated;
     },
     [actor]
@@ -98,25 +128,34 @@ export function useAdmin() {
     async (userId: string): Promise<User> => {
       const target = userService.getById(userId);
       const updated = await userService.unblockUser(userId);
-      adminService.logAudit({
-        actor: actor ? actor.name : 'System',
-        action: 'Unblocked account',
-        target: target ? target.name : userId,
-        timestamp: 'Just now',
-        type: 'moderation'
-      });
+      if (actor) {
+        await adminService.logAuditSafely({
+          actor,
+          action: 'Unblocked account',
+          target: target ? target.name : userId,
+          type: 'moderation'
+        });
+      }
       return updated;
     },
     [actor]
   );
 
-  const dismissReport = useCallback((reportId: string) => {
-    reportService.dismissReport(reportId);
-  }, []);
+  const dismissReport = useCallback(
+    async (reportId: string): Promise<ServiceResult<unknown>> => {
+      if (!actor) return { ok: false, message: 'Sign in as an admin to moderate reports.' };
+      return reportService.dismissReport(reportId, actor);
+    },
+    [actor]
+  );
 
-  const resolveReport = useCallback((reportId: string, actionTaken: string) => {
-    reportService.resolveReport(reportId, actionTaken);
-  }, []);
+  const resolveReport = useCallback(
+    async (reportId: string, actionTaken: string): Promise<ServiceResult<unknown>> => {
+      if (!actor) return { ok: false, message: 'Sign in as an admin to moderate reports.' };
+      return reportService.resolveReport(reportId, actionTaken, actor);
+    },
+    [actor]
+  );
 
   const deleteReportedContent = useCallback(
     async (reportId: string): Promise<ServiceResult<void>> => {
@@ -135,7 +174,9 @@ export function useAdmin() {
   );
 
   const createAnnouncement = useCallback(
-    (input: Omit<Announcement, 'id' | 'createdAt' | 'authorName' | 'isActive'>): Announcement => {
+    async (
+      input: Omit<Announcement, 'id' | 'createdAt' | 'createdAtMs' | 'authorId' | 'authorName' | 'isActive'>
+    ): Promise<Announcement> => {
       if (!actor) throw new Error('Sign in to publish announcements.');
       return adminService.createAnnouncement(actor, input);
     },
@@ -143,8 +184,13 @@ export function useAdmin() {
   );
 
   const saveAdminSettings = useCallback(
-    (patch: Partial<AdminSettings>) => adminService.saveAdminSettings(patch),
-    []
+    (patch: Partial<AdminSettings>): Promise<ServiceResult<AdminSettings>> => {
+      if (!actor) {
+        return Promise.resolve({ ok: false, message: 'Sign in as an admin to change policies.' });
+      }
+      return adminService.saveAdminSettings(patch, actor);
+    },
+    [actor]
   );
 
   const warnings = useMemo(() => adminState.warnings, [adminState.warnings]);
@@ -156,7 +202,12 @@ export function useAdmin() {
     auditLogs: adminState.auditLogs,
     warnings,
     adminSettings: adminState.adminSettings,
-    status: reportState.status === 'ready' && adminState.status === 'ready' ? 'ready' : adminState.status,
+    status:
+      reportState.status === 'ready' && adminState.status === 'ready'
+        ? 'ready'
+        : adminState.status === 'error' || reportState.status === 'error'
+          ? 'error'
+          : adminState.status,
     approveUser,
     rejectUser,
     blockUser,

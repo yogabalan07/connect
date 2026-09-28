@@ -53,7 +53,8 @@ export async function loadContent(uid: string): Promise<void> {
     doubtService.loadAll(uid),
     catalogService.loadAll(),
     socialService.loadAll(uid),
-    notificationService.loadAll(uid)
+    notificationService.loadAll(uid),
+    messageService.loadAll(uid)
   ]);
 }
 
@@ -63,6 +64,7 @@ export function unloadContent(): void {
   doubtService.bootstrap();
   answerService.bootstrap();
   notificationService.bootstrap();
+  messageService.bootstrap();
   socialService.bootstrap();
   catalogService.bootstrap();
   profileService.invalidateProfile();
@@ -74,6 +76,7 @@ export function resetContentServicesForTests(): void {
   doubtService.bootstrap();
   answerService.bootstrap();
   notificationService.bootstrap();
+  messageService.bootstrap();
   socialService.bootstrap();
   catalogService.bootstrap();
 }

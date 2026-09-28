@@ -27,6 +27,13 @@ export const RightSidebar: React.FC = () => {
     .filter(u => u.id !== currentUser.id && !followingUserIds.includes(u.id) && u.status === 'approved')
     .slice(0, 3);
 
+  // Live hub metrics - both derived from the feed and directory, never
+  // declared. A hard-coded "96.4% Answer Rate" would be indistinguishable
+  // from a measured one on screen.
+  const answeredCount = doubts.filter(d => d.answersCount > 0).length;
+  const answerRate = doubts.length === 0 ? 0 : Math.round((answeredCount / doubts.length) * 100);
+  const approvedMembers = users.filter(u => u.status === 'approved').length;
+
   return (
     <aside className="w-80 shrink-0 hidden xl:block sticky top-20 h-[calc(100vh-5rem)] overflow-y-auto pl-2 pb-8 space-y-5 text-slate-300">
       {/* Community Stats Widget */}
@@ -37,12 +44,14 @@ export const RightSidebar: React.FC = () => {
         </div>
         <div className="grid grid-cols-2 gap-3 text-center">
           <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/60">
-            <div className="text-lg font-bold text-white font-mono tabular-nums">96.4%</div>
-            <div className="text-[10px] text-slate-400 mt-0.5">Answer Rate</div>
+            <div className="text-lg font-bold text-white font-mono tabular-nums">{answerRate}%</div>
+            <div className="text-[10px] text-slate-400 mt-0.5">Answered</div>
           </div>
           <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/60">
-            <div className="text-lg font-bold text-indigo-400 font-mono tabular-nums">&lt; 45m</div>
-            <div className="text-[10px] text-slate-400 mt-0.5">Avg Response</div>
+            <div className="text-lg font-bold text-indigo-400 font-mono tabular-nums">
+              {approvedMembers}
+            </div>
+            <div className="text-[10px] text-slate-400 mt-0.5">Members</div>
           </div>
         </div>
       </div>
@@ -146,7 +155,9 @@ export const RightSidebar: React.FC = () => {
               </div>
               <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-400">
                 <span>{doubt.category}</span>
-                <span className="font-mono text-emerald-400 font-medium">+15 rep</span>
+                <span className="font-mono text-slate-500">
+                  ▲ {doubt.upvotes}
+                </span>
               </div>
             </Link>
           ))}

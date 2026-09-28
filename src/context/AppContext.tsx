@@ -13,7 +13,8 @@ import {
   Report,
   ReportReason,
   Tag,
-  User
+  User,
+  Warning
 } from '../types';
 import { LoadStatus, useStore } from '../lib/store';
 import { toastStore, ToastItem } from '../lib/toastStore';
@@ -66,6 +67,7 @@ interface AppContextType {
   reports: Report[];
   announcements: Announcement[];
   auditLogs: AuditLog[];
+  warnings: Warning[];
   adminSettings: AdminSettings;
   dataStatus: LoadStatus;
 
@@ -103,7 +105,15 @@ interface AppContextType {
 
   // Messaging
   setActiveConversationId: (id: string | null) => void;
-  sendMessage: (receiverId: string, text: string, codeSnippet?: Message['codeSnippet']) => void;
+  /**
+   * Opens (or reuses) the thread with `peerId` and selects it. Idempotent:
+   * the conversation id is the deterministic `{a_b}` pair key, so pressing
+   * "Message" twice never mints a second thread.
+   */
+  startConversation: (peerId: string) => Promise<void>;
+  /** Selects an existing thread, loads its history and advances my cursor. */
+  openConversation: (conversationId: string) => Promise<void>;
+  sendMessage: (receiverId: string, text: string, codeSnippet?: Message['codeSnippet']) => Promise<void>;
 
   // Profile
   updateUserProfile: (data: EditableProfilePatch) => Promise<void>;
@@ -113,8 +123,8 @@ interface AppContextType {
   rejectUser: (userId: string) => Promise<void>;
   blockUser: (userId: string) => Promise<void>;
   unblockUser: (userId: string) => Promise<void>;
-  dismissReport: (reportId: string) => void;
-  resolveReport: (reportId: string, actionTaken: string) => void;
+  dismissReport: (reportId: string) => Promise<void>;
+  resolveReport: (reportId: string, actionTaken: string) => Promise<void>;
   deleteReportedContent: (reportId: string) => Promise<void>;
   issueWarning: (userId: string, userName: string, reason: string) => Promise<void>;
   createReport: (input: {
@@ -127,7 +137,9 @@ interface AppContextType {
     description: string;
   }) => Promise<boolean>;
   saveAdminSettings: (patch: Partial<AdminSettings>) => Promise<boolean>;
-  createAnnouncement: (ann: Omit<Announcement, 'id' | 'createdAt' | 'authorName' | 'isActive'>) => void;
+  createAnnouncement: (
+    ann: Omit<Announcement, 'id' | 'createdAt' | 'createdAtMs' | 'authorId' | 'authorName' | 'isActive'>
+  ) => Promise<void>;
   createCategory: (cat: Omit<Category, 'id' | 'questionsCount'>) => Promise<void>;
   deleteCategory: (catId: string) => Promise<void>;
 
@@ -160,6 +172,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     activeConversationId,
     setActiveConversationId,
     sendMessage: sendMessageInternal,
+    startConversation: startConversationInternal,
+    openConversation: openConversationInternal,
     status: messagesStatus
   } = useMessages();
   const admin = useAdmin();
@@ -633,15 +647,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   // ---------------------------------------------------------------- Admin
-  const withToast = useCallback(
-    (action: () => void, message: string, type: ToastItem['type'] = 'success') => {
-      run(() => {
-        action();
-        toastStore.add(message, type);
-      });
-    },
-    [run]
-  );
+  // Every moderation write below round-trips through Firestore, so the
+  // success toast is emitted only after the rules accepted the write -
+  // claiming "report dismissed" first would be a lie the UI could never
+  // take back.
 
   const approveUser = useCallback(
     async (userId: string): Promise<void> => {
@@ -693,17 +702,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const dismissReport = useCallback(
-    (reportId: string) => {
-      withToast(() => admin.dismissReport(reportId), 'Report dismissed without action.', 'info');
+    async (reportId: string): Promise<void> => {
+      const result = await admin.dismissReport(reportId);
+      if (result.ok) {
+        toastStore.add('Report dismissed without action.', 'info');
+      } else {
+        toastStore.add(result.message, 'error');
+      }
     },
-    [admin, withToast]
+    [admin]
   );
 
   const resolveReport = useCallback(
-    (reportId: string, actionTaken: string) => {
-      withToast(() => admin.resolveReport(reportId, actionTaken), `Report resolved: ${actionTaken}`);
+    async (reportId: string, actionTaken: string): Promise<void> => {
+      const result = await admin.resolveReport(reportId, actionTaken);
+      if (result.ok) {
+        toastStore.add(`Report resolved: ${actionTaken}`);
+      } else {
+        toastStore.add(result.message, 'error');
+      }
     },
-    [admin, withToast]
+    [admin]
   );
 
   const deleteReportedContent = useCallback(
@@ -757,11 +776,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (result.ok) {
-        logAudit(user, `Filed report (${input.reason})`, input.targetTitle, 'moderation');
-        toastStore.add(
-          'Report queued for campus moderation (stored locally until Firebase is connected).',
-          'info'
-        );
+        await adminService.logAuditSafely({
+          actor: user,
+          action: `Filed report (${input.reason})`,
+          target: input.targetTitle,
+          type: 'moderation'
+        });
+        toastStore.add('Report queued for campus moderation.', 'info');
         return true;
       }
       toastStore.add(result.message, 'error');
@@ -775,7 +796,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     async (patch: Partial<AdminSettings>): Promise<boolean> => {
       const result = await admin.saveAdminSettings(patch);
       if (result.ok) {
-        toastStore.add('Moderation policies saved to this session (Firestore persistence comes next).', 'success');
+        toastStore.add('Moderation policies saved.', 'success');
         return true;
       }
       toastStore.add(result.message, 'error');
@@ -785,23 +806,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   const createAnnouncement = useCallback(
-    (ann: Omit<Announcement, 'id' | 'createdAt' | 'authorName' | 'isActive'>) => {
-      void runAsync(async user => {
-        const created = admin.createAnnouncement(ann);
+    async (
+      ann: Omit<Announcement, 'id' | 'createdAt' | 'createdAtMs' | 'authorId' | 'authorName' | 'isActive'>
+    ): Promise<void> => {
+      if (!currentUser) {
+        toastStore.add('You must be signed in to do that.', 'error');
+        throw new ServiceError('auth/required', 'Sign in to publish announcements.');
+      }
+      try {
+        const created = await admin.createAnnouncement(ann);
         const approved = userService.getUsers().filter(u => u.status === 'approved');
         await bestEffort(() =>
           notificationService.notifyAnnouncement(
             approved.map(member => member.id),
-            user,
+            currentUser,
             created.title,
             created.content
           )
         );
         toastStore.add('Campus announcement broadcasted!', 'success');
-      });
+      } catch (error) {
+        toastStore.add(errorMessage(error), 'error');
+        throw error;
+      }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [currentUser, admin, runAsync]
+    [admin, bestEffort]
   );
 
   const createCategory = useCallback(
@@ -827,22 +857,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   // -------------------------------------------------------------- Messages
+  // Each wrapper toasts the typed failure and then rethrows: the page still
+  // needs to know the write failed, or it would clear an input the message
+  // never left.
   const sendMessage = useCallback(
-    (receiverId: string, text: string, codeSnippet?: Message['codeSnippet']) => {
-      sendMessageInternal(receiverId, text, codeSnippet);
+    async (receiverId: string, text: string, codeSnippet?: Message['codeSnippet']): Promise<void> => {
+      try {
+        await sendMessageInternal(receiverId, text, codeSnippet);
+      } catch (error) {
+        toastStore.add(errorMessage(error), 'error');
+        throw error;
+      }
     },
     [sendMessageInternal]
   );
 
+  const startConversation = useCallback(
+    async (peerId: string): Promise<void> => {
+      try {
+        await startConversationInternal(peerId);
+      } catch (error) {
+        toastStore.add(errorMessage(error), 'error');
+        throw error;
+      }
+    },
+    [startConversationInternal]
+  );
+
+  const openConversation = useCallback(
+    async (conversationId: string): Promise<void> => {
+      try {
+        await openConversationInternal(conversationId);
+      } catch (error) {
+        toastStore.add(errorMessage(error), 'error');
+        throw error;
+      }
+    },
+    [openConversationInternal]
+  );
+
   const dataStatus = useMemo<LoadStatus>(() => {
+    // The moderator-only stores are deliberately excluded: they are read
+    // behind `useAdmin`'s admin guard, so an ordinary member would sit on
+    // `loading` forever while the rules refused every one of those reads.
     const statuses: LoadStatus[] = [
       doubtsStatus,
       answersState.status,
       socialState.status,
       catalogState.status,
       notificationsStatus,
-      messagesStatus,
-      admin.status
+      messagesStatus
     ];
     if (statuses.some(s => s === 'error')) return 'error';
     if (statuses.every(s => s === 'ready')) return 'ready';
@@ -853,8 +917,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     socialState.status,
     catalogState.status,
     notificationsStatus,
-    messagesStatus,
-    admin.status
+    messagesStatus
   ]);
 
   const value = useMemo<AppContextType>(
@@ -874,6 +937,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       reports: admin.reports,
       announcements: admin.announcements,
       auditLogs: admin.auditLogs,
+      warnings: admin.warnings,
       adminSettings: admin.adminSettings,
       dataStatus,
       getDoubtById,
@@ -900,6 +964,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       markAllNotificationsRead,
       unreadNotificationsCount: unreadCount,
       setActiveConversationId,
+      startConversation,
+      openConversation,
       sendMessage,
       updateUserProfile,
       approveUser,
@@ -958,6 +1024,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       markAllNotificationsRead,
       unreadCount,
       setActiveConversationId,
+      startConversation,
+      openConversation,
       sendMessage,
       updateUserProfile,
       approveUser,
@@ -984,9 +1052,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 };
 
-/** Audit helpers (module-level so component callbacks stay stable). */
+/**
+ * Audit helpers (module-level so component callbacks stay stable).
+ *
+ * Fire-and-forget by design: the trail describes an action that has already
+ * committed, so a refused append must never surface as a failure for the
+ * thing the member actually did. `logAuditSafely` owns that swallow.
+ */
 function logAudit(user: User, action: string, target: string, type: AuditLog['type']): void {
-  adminService.logAudit({ actor: user.name, action, target, timestamp: 'Just now', type });
+  void adminService.logAuditSafely({ actor: user, action, target, type });
 }
 
 function logDoubtAction(

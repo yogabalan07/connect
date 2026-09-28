@@ -11,16 +11,22 @@ export const AdminAnnouncementsPage: React.FC = () => {
   const [targetAudience, setTargetAudience] = useState<'all' | 'students' | 'mentors' | 'CSE' | 'ECE'>('all');
   const [isFormOpen, setIsFormOpen] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim() || !content.trim()) return;
 
-    createAnnouncement({
-      title: title.trim(),
-      content: content.trim(),
-      priority,
-      targetAudience
-    });
+    try {
+      await createAnnouncement({
+        title: title.trim(),
+        content: content.trim(),
+        priority,
+        targetAudience
+      });
+    } catch {
+      // `AppContext.createAnnouncement` already toasted; keep the draft so
+      // the admin does not retype a notice the write refused.
+      return;
+    }
 
     setTitle('');
     setContent('');

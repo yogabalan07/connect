@@ -1,10 +1,12 @@
 import { Report, ReportReason, User } from '../types';
 import { createStore, LoadStatus, useStore } from '../lib/store';
 import { ServiceResult, fail, ok } from '../lib/errors';
+import { mapFirestoreError } from './firestoreErrors';
 import { doubtService } from './doubtService';
 import { answerService } from './answerService';
 import { adminService } from './adminService';
 import { catalogService } from './catalogService';
+import { getModerationAdapter } from './moderationAdapter';
 
 interface ReportState {
   reports: Report[];
@@ -35,15 +37,34 @@ export interface CreateReportInput {
 }
 
 /**
- * Moderation service. UI never writes reports directly — it always goes
- * through these methods so Cloud Functions can take over the same call sites.
- * Reports are kept in memory for this session only.
+ * Moderation service: the report queue, closures and academic warnings.
+ *
+ * Everything is persisted through `ModerationAdapter` (`reports`,
+ * `warnings`, `auditLogs`). The rules make the document id itself the
+ * duplicate guard - `{targetType}_{targetId}_{reporterId}` - so re-reporting
+ * the same content fails as `moderation/duplicate` rather than creating a
+ * second row, and only a moderator may read the queue or move a case.
+ *
+ * UI never writes reports directly: it always goes through these methods so
+ * validation, the audit entry and the store stay in lock-step with the
+ * document that Firestore actually accepted.
  */
 export const reportService = {
   store,
 
   bootstrap(): void {
-    store.set(prev => ({ ...prev, status: 'ready' }));
+    store.set(prev => ({ ...prev, reports: [], status: 'loading' }));
+  },
+
+  /** Reads the queue once per admin session (moderator-only in the rules). */
+  async loadAll(): Promise<void> {
+    try {
+      const reports = await getModerationAdapter().listReports();
+      store.set(prev => ({ ...prev, reports, status: 'ready' }));
+    } catch (error) {
+      store.set(prev => ({ ...prev, status: 'error' }));
+      throw mapFirestoreError(error);
+    }
   },
 
   async createReport(input: CreateReportInput): Promise<ServiceResult<Report>> {
@@ -65,46 +86,79 @@ export const reportService = {
       return fail('Report description must be 1000 characters or fewer.');
     }
 
-    const created: Report = {
-      id: `report-${Date.now()}`,
-      targetType: input.targetType,
-      targetId: input.targetId,
-      targetTitle: input.targetTitle,
-      reporterId: input.reporter.id,
-      reporterName: input.reporter.name,
-      reportedUserId: input.reportedUserId,
-      reportedUserName: input.reportedUserName,
-      reason: input.reason,
-      description,
-      status: 'pending',
-      createdAt: 'Just now'
-    };
-
-    store.set(prev => ({ ...prev, reports: [created, ...prev.reports] }));
-    return ok(created);
+    try {
+      const created = await getModerationAdapter().createReport({
+        targetType: input.targetType,
+        targetId: input.targetId,
+        targetTitle: input.targetTitle,
+        reporterId: input.reporter.id,
+        reporterName: input.reporter.name,
+        reportedUserId: input.reportedUserId,
+        reportedUserName: input.reportedUserName,
+        reason: input.reason,
+        description
+      });
+      store.set(prev => ({ ...prev, reports: [created, ...prev.reports] }));
+      return ok(created);
+    } catch (error) {
+      const mapped = mapFirestoreError(error);
+      if (mapped.code.endsWith('/duplicate')) {
+        return fail('You already reported this content. Moderators are reviewing it.');
+      }
+      return fail(mapped.message);
+    }
   },
 
-  dismissReport(reportId: string): void {
-    store.set(prev => ({
-      ...prev,
-      reports: prev.reports.map(r => (r.id === reportId ? { ...r, status: 'dismissed' as const } : r))
-    }));
+  /** Closes a case without action. Moderator-only, recorded on the trail. */
+  async dismissReport(reportId: string, moderator: User): Promise<ServiceResult<Report>> {
+    try {
+      const updated = await getModerationAdapter().resolveReport(reportId, {
+        status: 'dismissed',
+        resolutionNote: 'Dismissed as a false positive.',
+        resolvedById: moderator.id
+      });
+      store.set(prev => ({
+        ...prev,
+        reports: prev.reports.map(r => (r.id === reportId ? updated : r))
+      }));
+      await adminService.logAuditSafely({
+        actor: moderator,
+        action: 'Dismissed report',
+        target: reportId,
+        type: 'moderation'
+      });
+      return ok(updated);
+    } catch (error) {
+      return fail(mapFirestoreError(error).message);
+    }
   },
 
-  resolveReport(reportId: string, actionTaken: string): void {
-    store.set(prev => ({
-      ...prev,
-      reports: prev.reports.map(r =>
-        r.id === reportId ? { ...r, status: 'resolved' as const } : r
-      )
-    }));
-    adminService.logAudit({
-      actor: 'Moderation',
-      action: `Resolved report: ${actionTaken}`,
-      target: reportId,
-      timestamp: 'Just now',
-      type: 'moderation'
-    });
+  /** Closes a case with action. Moderator-only, recorded on the trail. */
+  async resolveReport(
+    reportId: string,
+    actionTaken: string,
+    moderator: User
+  ): Promise<ServiceResult<Report>> {
+    try {
+      const updated = await getModerationAdapter().resolveReport(reportId, {
+        status: 'resolved',
+        resolutionNote: actionTaken,
+        resolvedById: moderator.id
+      });
+      store.set(prev => ({
+        ...prev,
+        reports: prev.reports.map(r => (r.id === reportId ? updated : r))
+      }));
+      await adminService.logAuditSafely({
+        actor: moderator,
+        action: `Resolved report: ${actionTaken}`,
+        target: reportId,
+        type: 'moderation'
+      });
+      return ok(updated);
+    } catch (error) {
+      return fail(mapFirestoreError(error).message);
+    }
   },
 
   /** Removes the reported content, then closes the report. */
@@ -129,18 +183,20 @@ export const reportService = {
         }
       }
 
+      const updated = await getModerationAdapter().resolveReport(reportId, {
+        status: 'resolved',
+        resolutionNote: `Removed reported ${report.targetType}`,
+        resolvedById: moderator.id
+      });
       store.set(prev => ({
         ...prev,
-        reports: prev.reports.map(r =>
-          r.id === reportId ? { ...r, status: 'resolved' as const } : r
-        )
+        reports: prev.reports.map(r => (r.id === reportId ? updated : r))
       }));
 
-      adminService.logAudit({
-        actor: moderator.name,
+      await adminService.logAuditSafely({
+        actor: moderator,
         action: `Removed reported ${report.targetType}`,
         target: report.targetTitle,
-        timestamp: 'Just now',
         type: 'moderation'
       });
 
@@ -162,22 +218,18 @@ export const reportService = {
       return fail('Describe the warning in at least 5 characters.');
     }
 
-    adminService.addWarning({
-      userId,
-      userName,
-      reason: trimmed,
-      issuedBy: moderator.name,
-      issuedAt: 'Just now'
-    });
-    adminService.logAudit({
-      actor: moderator.name,
-      action: 'Issued academic warning',
-      target: userName,
-      timestamp: 'Just now',
-      type: 'moderation'
-    });
-
-    return ok(undefined);
+    try {
+      await adminService.createWarning(moderator, userId, userName, trimmed);
+      await adminService.logAuditSafely({
+        actor: moderator,
+        action: 'Issued academic warning',
+        target: userName,
+        type: 'moderation'
+      });
+      return ok(undefined);
+    } catch (error) {
+      return fail(mapFirestoreError(error).message);
+    }
   }
 };
 

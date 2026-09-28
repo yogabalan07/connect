@@ -34,7 +34,7 @@ type ProfileTab = 'overview' | 'questions' | 'answers' | 'accepted' | 'activity'
 export const UserProfilePage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { users, currentUser, doubts, answers, followingUserIds, toggleFollowUser } = useApp();
+  const { users, currentUser, doubts, answers, followingUserIds, toggleFollowUser, startConversation } = useApp();
   const [activeTab, setActiveTab] = useState<ProfileTab>('overview');
   const [stats, setStats] = useState<ProfileStats | null>(null);
   const [activity, setActivity] = useState<ActivityItem[] | null>(null);
@@ -168,13 +168,20 @@ export const UserProfilePage: React.FC = () => {
                     )}
                   </button>
 
-                  <Link
-                    to="/app/messages"
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // Open (or reuse) the thread before navigating, so the
+                      // inbox is never blank when the page appears.
+                      void startConversation(profileUser.id)
+                        .then(() => navigate('/app/messages'))
+                        .catch(() => undefined);
+                    }}
                     className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-xs font-semibold text-slate-200 transition-colors"
                   >
                     <MessageSquare className="w-4 h-4" />
                     <span>Message</span>
-                  </Link>
+                  </button>
                 </>
               ) : (
                 <Link

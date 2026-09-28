@@ -1052,6 +1052,385 @@ service cloud.firestore {
       allow delete: if approved(caller()) && admin(caller());
     }
 
+    // ------------------------------------------------------------ reports
+    /**
+     * `reports/{reportId}` - the moderation queue.
+     *
+     * The id is a pure function of what was reported and by whom
+     * (`{targetType}_{targetId}_{reporterId}`), so filing the same report
+     * twice is an `already-exists` failure rather than a second row: that is
+     * the duplicate handling the queue needs, enforced structurally.
+     *
+     * Read is moderator-only. A reporter never needs the row back - the UI
+     * confirms immediately - and a queue nobody outside the moderators can
+     * open is one less shape a query has to prove.
+     */
+    match /reports/{reportId} {
+
+      function validReportTarget(t) {
+        return t in ['doubt', 'answer', 'user', 'comment'];
+      }
+
+      function validReportReason(r) {
+        return r in [
+          'Spam',
+          'Wrong information',
+          'Abusive content',
+          'Inappropriate content',
+          'Harassment',
+          'Duplicate question',
+          'Other'
+        ];
+      }
+
+      allow read: if approved(caller()) && admin(caller());
+
+      allow create: if approved(caller())
+        && validReportTarget(request.resource.data.targetType)
+        && validReportReason(request.resource.data.reason)
+        && request.resource.data.id == reportId
+        && reportId == request.resource.data.targetType + '_'
+          + request.resource.data.targetId + '_' + request.auth.uid
+        && request.resource.data.targetId is string
+        && request.resource.data.targetId.size() > 0
+        && request.resource.data.targetId.size() <= 128
+        && request.resource.data.targetTitle is string
+        && request.resource.data.targetTitle.size() <= 300
+        && request.resource.data.reporterId == request.auth.uid
+        && request.resource.data.reporterName is string
+        && request.resource.data.reporterName.size() > 0
+        && request.resource.data.reporterName.size() <= 100
+        && request.resource.data.reportedUserId is string
+        && request.resource.data.reportedUserName is string
+        && request.resource.data.reportedUserName.size() <= 100
+        && request.resource.data.description is string
+        && request.resource.data.description.size() <= 1000
+        && request.resource.data.status == 'pending'
+        && request.resource.data.resolvedById == ''
+        && request.resource.data.resolvedAtMs == 0
+        && request.resource.data.resolutionNote == ''
+        && saneTime(request.resource.data.createdAtMs);
+
+      /** Only a moderator may move a case, and only forward into a closed
+       *  state (or reopen it); `resolvedById` is always the acting admin, so
+       *  an audit row can never claim a decision nobody made. */
+      allow update: if approved(caller())
+        && admin(caller())
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['status', 'resolvedById', 'resolvedAtMs', 'resolutionNote'])
+        && request.resource.data.status in ['pending', 'resolved', 'dismissed']
+        && request.resource.data.resolvedById == request.auth.uid
+        && request.resource.data.resolutionNote is string
+        && request.resource.data.resolutionNote.size() <= 500
+        && (request.resource.data.status == 'pending'
+            ? (request.resource.data.resolvedAtMs == 0
+                && request.resource.data.resolutionNote == '')
+            : saneTime(request.resource.data.resolvedAtMs));
+
+      allow delete: if approved(caller()) && admin(caller());
+    }
+
+    // ------------------------------------------------------ announcements
+    /** Official notices: every approved member reads them, only a
+     *  moderator mints or rewrites one, and `authorId` is pinned forever. */
+    match /announcements/{announcementId} {
+
+      function validAudience(a) {
+        return a in ['all', 'students', 'mentors', 'CSE', 'ECE'];
+      }
+
+      allow read: if approved(caller());
+
+      allow create: if approved(caller())
+        && admin(caller())
+        && request.resource.data.id == announcementId
+        && request.resource.data.authorId == request.auth.uid
+        && request.resource.data.authorName is string
+        && request.resource.data.authorName.size() > 0
+        && request.resource.data.authorName.size() <= 100
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 200
+        && request.resource.data.content is string
+        && request.resource.data.content.size() > 0
+        && request.resource.data.content.size() <= 4000
+        && request.resource.data.priority in ['low', 'normal', 'urgent']
+        && validAudience(request.resource.data.targetAudience)
+        && request.resource.data.isActive == true
+        && saneTime(request.resource.data.createdAtMs);
+
+      allow update: if approved(caller())
+        && admin(caller())
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['title', 'content', 'priority', 'targetAudience', 'isActive', 'updatedAtMs'])
+        && request.resource.data.title is string
+        && request.resource.data.title.size() > 0
+        && request.resource.data.title.size() <= 200
+        && request.resource.data.content is string
+        && request.resource.data.content.size() > 0
+        && request.resource.data.content.size() <= 4000
+        && request.resource.data.priority in ['low', 'normal', 'urgent']
+        && validAudience(request.resource.data.targetAudience)
+        && request.resource.data.isActive is bool
+        && saneTime(request.resource.data.updatedAtMs);
+
+      allow delete: if approved(caller()) && admin(caller());
+    }
+
+    // ---------------------------------------------------------- auditLogs
+    /**
+     * `auditLogs/{logId}` - append-only trail.
+     *
+     * `actorId` is pinned to the caller, so nobody can file a decision under
+     * somebody else's name; the row is immutable (`update` is refused) and
+     * only a moderator may retire one. Read is moderator-only: the trail
+     * exists for the people who have to answer for it.
+     */
+    match /auditLogs/{logId} {
+      allow read: if approved(caller()) && admin(caller());
+
+      allow create: if approved(caller())
+        // A trail only the moderators can append to: without this the row is
+        // readable by nobody but still writable by everybody, which is how a
+        // student would file decisions under their own name.
+        && admin(caller())
+        && request.resource.data.id == logId
+        && request.resource.data.actorId == request.auth.uid
+        && request.resource.data.actorName is string
+        && request.resource.data.actorName.size() > 0
+        && request.resource.data.actorName.size() <= 100
+        && request.resource.data.action is string
+        && request.resource.data.action.size() > 0
+        && request.resource.data.action.size() <= 200
+        && request.resource.data.target is string
+        && request.resource.data.target.size() <= 300
+        && request.resource.data.type in ['user', 'doubt', 'moderation', 'system']
+        && saneTime(request.resource.data.createdAtMs);
+
+      allow update: if false;
+
+      allow delete: if approved(caller()) && admin(caller());
+    }
+
+    // ---------------------------------------------------------- warnings
+    /** Formal academic warnings: moderator-issued, immutable, moderator-read. */
+    match /warnings/{warningId} {
+      allow read: if approved(caller()) && admin(caller());
+
+      allow create: if approved(caller())
+        && admin(caller())
+        && request.resource.data.id == warningId
+        && request.resource.data.userId is string
+        && request.resource.data.userId.size() > 0
+        && request.resource.data.userName is string
+        && request.resource.data.userName.size() > 0
+        && request.resource.data.userName.size() <= 100
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() >= 5
+        && request.resource.data.reason.size() <= 500
+        && request.resource.data.issuedById == request.auth.uid
+        && request.resource.data.issuedByName is string
+        && request.resource.data.issuedByName.size() > 0
+        && saneTime(request.resource.data.createdAtMs);
+
+      allow update: if false;
+
+      allow delete: if approved(caller()) && admin(caller());
+    }
+
+    // ------------------------------------------------------ adminSettings
+    /**
+     * `adminSettings/singleton` - the moderation policy document.
+     * Students never read it, so both branches are provable from `admin()`
+     * alone; the field checks keep a policy edit to four validated values.
+     */
+    match /adminSettings/{settingId} {
+
+      function validSettings(d) {
+        return settingId == 'singleton'
+          && d.id == 'singleton'
+          && d.requireFacultyApproval is bool
+          && d.autoFlagSpamWords is bool
+          && d.allowedDomain is string
+          && d.allowedDomain.size() > 0
+          && d.allowedDomain.size() <= 100
+          // Anchored, because `matches()` finds a substring: `^\S+$` is the
+          // only way to say "the whole domain, no whitespace anywhere" without
+          // a `contains()` - which the rules language does not have.
+          && d.allowedDomain.matches('^\\S+$')
+          && d.minRepToComment is number
+          && d.minRepToComment >= 0
+          && d.minRepToComment <= 1000000;
+      }
+
+      allow read: if approved(caller()) && admin(caller());
+
+      allow create: if approved(caller())
+        && admin(caller())
+        && validSettings(request.resource.data)
+        && saneTime(request.resource.data.updatedAtMs)
+        && request.resource.data.updatedBy == request.auth.uid;
+
+      allow update: if approved(caller())
+        && admin(caller())
+        && validSettings(request.resource.data)
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly([
+              'requireFacultyApproval',
+              'autoFlagSpamWords',
+              'allowedDomain',
+              'minRepToComment',
+              'updatedAtMs',
+              'updatedBy'
+            ])
+        && saneTime(request.resource.data.updatedAtMs)
+        && request.resource.data.updatedBy == request.auth.uid;
+
+      allow delete: if false;
+    }
+
+    // ------------------------------------------------------------ messaging
+    /**
+     * Direct messages.
+     *
+     *   conversations/{a_b}                  one document per member pair
+     *   conversations/{a_b}/messages/{id}    the thread itself
+     *   conversationReads/{a_b}_{uid}        one member's own read receipt
+     *
+     * The conversation id is its two participants in ascending order, so a
+     * pair can only ever own ONE conversation, and every rule below re-reads
+     * the parent and requires the caller to be one of its two members.
+     * Knowing (or guessing) a document id is therefore never enough to read
+     * somebody else's thread - the same guarantee the private doubts rely on.
+     *
+     * Read receipts live in their own collection precisely so that each
+     * member can move only their own: a map field on the conversation would
+     * have no way to prove that in rules.
+     */
+    match /conversations/{conversationId} {
+
+      /** The caller may only ever be a member of a pair they named. */
+      function selfConversation(p) {
+        return p is list
+          && p.size() == 2
+          && p[0] is string
+          && p[1] is string
+          && p[0] != p[1]
+          && p[0] < p[1]
+          && conversationId == p[0] + '_' + p[1]
+          && (request.auth.uid == p[0] || request.auth.uid == p[1]);
+      }
+
+      function threadMember() {
+        return approved(caller())
+          && request.auth.uid in resource.data.participants;
+      }
+
+      allow get, list: if threadMember();
+
+      allow create: if approved(caller())
+        && selfConversation(request.resource.data.participants)
+        && request.resource.data.id == conversationId
+        && memberStatus(request.resource.data.participants[0]) == 'approved'
+        && memberStatus(request.resource.data.participants[1]) == 'approved'
+        && saneTime(request.resource.data.createdAtMs)
+        && request.resource.data.updatedAtMs == request.resource.data.createdAtMs
+        && request.resource.data.lastMessageAtMs == 0
+        && request.resource.data.lastMessageSenderId == ''
+        && request.resource.data.lastMessagePreview == '';
+
+      /** Activity bookkeeping only: participants and identity are frozen, so
+       *  a conversation can never be re-pointed at a different member. */
+      allow update: if threadMember()
+        && request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['updatedAtMs', 'lastMessageAtMs', 'lastMessageSenderId', 'lastMessagePreview'])
+        && request.resource.data.participants == resource.data.participants
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.createdAtMs == resource.data.createdAtMs
+        && saneTime(request.resource.data.updatedAtMs)
+        && saneTime(request.resource.data.lastMessageAtMs)
+        && request.resource.data.lastMessageAtMs >= resource.data.lastMessageAtMs
+        && request.resource.data.lastMessageSenderId is string
+        && (request.resource.data.lastMessageSenderId == ''
+            || request.resource.data.lastMessageSenderId in request.resource.data.participants)
+        && request.resource.data.lastMessagePreview is string
+        && request.resource.data.lastMessagePreview.size() <= 200;
+
+      allow delete: if threadMember() || admin(caller());
+
+      // ----------------------------------------------------------- messages
+      match /messages/{messageId} {
+
+        function parentConversation() {
+          return get(/databases/$(database)/documents/conversations/$(conversationId)).data;
+        }
+
+        function threadReader() {
+          return approved(caller())
+            && request.auth.uid in parentConversation().participants;
+        }
+
+        allow get, list: if threadReader();
+
+        allow create: if threadReader()
+          // Read and write are the same membership test. Checking only the
+          // receiver would let ANY approved member inject a message into
+          // anyone else's thread by naming one of its two members as the
+          // receiver - the sender must belong to the pair too.
+          && request.resource.data.id == messageId
+          && request.resource.data.conversationId == conversationId
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.receiverId is string
+          && request.resource.data.receiverId != request.auth.uid
+          && request.resource.data.receiverId in parentConversation().participants
+          && request.resource.data.text is string
+          && request.resource.data.text.size() > 0
+          && request.resource.data.text.size() <= 4000
+          && (request.resource.data.codeSnippet == null
+            || (request.resource.data.codeSnippet is map
+              && request.resource.data.codeSnippet.language is string
+              && request.resource.data.codeSnippet.language.size() <= 40
+              && request.resource.data.codeSnippet.code is string
+              && request.resource.data.codeSnippet.code.size() <= 20000))
+          && saneTime(request.resource.data.createdAtMs);
+
+        /** A message is evidence: never edited, only removed by its author
+         *  or a moderator. Read state lives in `conversationReads`. */
+        allow update: if false;
+
+        allow delete: if approved(caller())
+          && (resource.data.senderId == request.auth.uid || admin(caller()));
+      }
+    }
+
+    /**
+     * `conversationReads/{conversationId}_{uid}` - one member's own cursor.
+     * Nobody else can read it, and `lastReadAtMs` only ever moves forward,
+     * so a receipt can neither be forged for someone else nor rewound.
+     */
+    match /conversationReads/{readId} {
+      allow read: if approved(caller()) && resource.data.userId == request.auth.uid;
+
+      allow create: if approved(caller())
+        && readId == request.resource.data.conversationId + '_' + request.auth.uid
+        && request.resource.data.id == readId
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.conversationId is string
+        && request.resource.data.conversationId.size() > 0
+        && request.auth.uid in get(
+            /databases/$(database)/documents/conversations/$(request.resource.data.conversationId)
+          ).data.participants
+        && saneTime(request.resource.data.lastReadAtMs);
+
+      allow update: if approved(caller())
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastReadAtMs'])
+        && saneTime(request.resource.data.lastReadAtMs)
+        && request.resource.data.lastReadAtMs >= resource.data.lastReadAtMs;
+
+      allow delete: if approved(caller()) && resource.data.userId == request.auth.uid;
+    }
+
     // ------------------------------------------------------- everything else
     match /{document=**} {
       allow read, write: if false;

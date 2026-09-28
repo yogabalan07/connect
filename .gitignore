@@ -18,5 +18,12 @@ firestore-debug.log
 storage-debug.log
 ui-debug.log
 firebase-cache/
+firebase-export/
+.runtimeconfig.json
 functions/lib/
 functions/node_modules/
+
+# Local agent/tooling metadata — never part of the product
+.agents/
+.claude/
+skills-lock.json

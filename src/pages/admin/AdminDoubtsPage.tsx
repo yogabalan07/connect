@@ -4,7 +4,7 @@ import { AlertTriangle, Trash2, Eye, ShieldAlert, MessageSquare, HelpCircle } fr
 import { useApp } from '../../context/AppContext';
 
 export const AdminDoubtsPage: React.FC = () => {
-  const { doubts, deleteDoubt, issueWarning, blockUser } = useApp();
+  const { doubts, deleteDoubt, issueWarning, blockUser, warnings } = useApp();
   const [search, setSearch] = useState('');
 
   const filtered = doubts.filter(d =>
@@ -111,6 +111,43 @@ export const AdminDoubtsPage: React.FC = () => {
             </tbody>
           </table>
         </div>
+      </div>
+
+      {/* Warnings issued through the ShieldAlert action above. Until this
+          panel existed the write landed in Firestore with nowhere to be read
+          back, which made "recorded" an invisible claim. */}
+      <div className="rounded-3xl bg-slate-900/80 border border-slate-800 overflow-hidden">
+        <div className="flex items-center gap-2 p-4 border-b border-slate-800 bg-slate-950/60">
+          <ShieldAlert className="w-4 h-4 text-amber-400" />
+          <h2 className="text-sm font-bold text-white">Recorded Academic Warnings</h2>
+          <span className="ml-auto text-[11px] font-mono text-slate-500">{warnings.length}</span>
+        </div>
+
+        {warnings.length === 0 ? (
+          <div className="p-8 text-center text-xs text-slate-400">
+            No academic warnings on record.
+          </div>
+        ) : (
+          <ul className="divide-y divide-slate-800/60">
+            {warnings.map(warning => (
+              <li key={warning.id} className="p-4 flex items-start justify-between gap-4 text-xs">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-semibold text-white">{warning.userName}</span>
+                    <span className="text-[10px] font-mono text-slate-500">{warning.issuedAt}</span>
+                  </div>
+                  <p className="mt-1 text-slate-300 line-clamp-2">{warning.reason}</p>
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    Issued by {warning.issuedByName}
+                  </p>
+                </div>
+                <span className="shrink-0 px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/20 text-amber-300 text-[10px] font-semibold uppercase tracking-wider">
+                  Warned
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );

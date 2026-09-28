@@ -14,6 +14,7 @@ import {
   ArrowRight
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { relativeTime } from '../../lib/time';
 
 export const AdminDashboardPage: React.FC = () => {
   const navigate = useNavigate();
@@ -148,7 +149,9 @@ export const AdminDashboardPage: React.FC = () => {
                     <span className="font-semibold text-rose-400 uppercase text-[10px] tracking-wide font-mono">
                       Reason: {r.reason}
                     </span>
-                    <span className="text-[10px] text-slate-500 font-mono">{r.createdAt}</span>
+                    <span className="text-[10px] text-slate-500 font-mono">
+                      {relativeTime(r.createdAtMs)}
+                    </span>
                   </div>
                   <div className="text-xs text-slate-200 line-clamp-1">"{r.targetTitle}"</div>
                   <div className="text-[11px] text-slate-400">

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { Award, CheckCircle2, MessageCircle, UserPlus, UserCheck } from 'lucide-react';
 import { User } from '../../types';
 import { useApp } from '../../context/AppContext';
@@ -10,9 +10,30 @@ interface UserCardProps {
 }
 
 export const UserCard: React.FC<UserCardProps> = ({ user, onMessage }) => {
-  const { currentUser, followingUserIds, toggleFollowUser } = useApp();
+  const { currentUser, followingUserIds, toggleFollowUser, startConversation } = useApp();
+  const navigate = useNavigate();
   const isFollowing = followingUserIds.includes(user.id);
   const isSelf = currentUser ? currentUser.id === user.id : false;
+
+  /**
+   * Opens (or reuses) the thread first, then navigates.
+   *
+   * Landing on `/app/messages` with an empty inbox would look broken even
+   * though the write succeeded; `startConversation` is idempotent, so
+   * pressing this twice never mints a second document.
+   */
+  const handleMessage = (): void => {
+    void (async () => {
+      try {
+        await startConversation(user.id);
+      } catch {
+        // Already toasted by `AppContext.startConversation`.
+        return;
+      }
+      onMessage?.();
+      navigate('/app/messages');
+    })();
+  };
 
   return (
     <div className="rounded-2xl bg-slate-900/80 border border-slate-800/80 hover:border-slate-700/80 p-5 shadow-sm transition-all text-slate-100 flex flex-col justify-between">
@@ -116,13 +137,14 @@ export const UserCard: React.FC<UserCardProps> = ({ user, onMessage }) => {
             )}
           </button>
 
-          <Link
-            to="/app/messages"
+          <button
+            type="button"
+            onClick={handleMessage}
             className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700/80 border border-slate-700 text-slate-300 hover:text-white transition-colors"
             title="Send Message"
           >
             <MessageCircle className="w-4 h-4" />
-          </Link>
+          </button>
         </div>
       )}
     </div>

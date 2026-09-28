@@ -310,7 +310,10 @@ export interface Message {
   senderId: string;
   receiverId: string;
   text: string;
+  /** Derived from `createdAtMs` when the thread is read (relative time). */
   timestamp: string;
+  /** Epoch ms of the write - the field `firestore.rules` validates. */
+  createdAtMs: number;
   read: boolean;
   attachment?: {
     name: string;
@@ -322,10 +325,32 @@ export interface Message {
 }
 
 export interface Conversation {
+  /** Document id - the two participant uids joined by `_`. */
   id: string;
-  participant: User;
-  lastMessage: Message;
+  /**
+   * The two Firebase UIDs in ascending order - literally the document id
+   * (`conversations/{a_b}`). There is exactly one document per member pair,
+   * which is what makes a duplicate conversation structurally impossible.
+   */
+  participants: string[];
+  /**
+   * The peer, resolved from the user directory. `null` only while that
+   * member is not in the directory (a deleted or not-yet-loaded profile);
+   * the thread itself still renders.
+   */
+  participant: User | null;
+  lastMessage: Message | null;
+  /**
+   * Derived, never stored: `1` when the peer wrote after my own read cursor
+   * (`conversationReads/{a_b}_{uid}.lastReadAtMs`), otherwise `0`. Nothing a
+   * client can write moves it - my cursor is my own document and theirs is
+   * theirs.
+   */
   unreadCount: number;
+  /** `conversation.lastMessageAtMs`. */
+  lastMessageAtMs: number;
+  /** My own read cursor for this thread (0 when never opened). */
+  lastReadAtMs: number;
 }
 
 export interface Category {
@@ -358,11 +383,19 @@ export type ReportReason =
   | 'Duplicate question'
   | 'Other';
 
+/**
+ * A moderation case (`reports/{reportId}`).
+ *
+ * The document id is `{targetType}_{targetId}_{reporterId}`, so one member
+ * can only ever report a given target once - `firestore.rules` rebuilds the
+ * same id on create, which is how duplicate reports are refused outright.
+ */
 export interface Report {
   id: string;
   targetType: 'doubt' | 'answer' | 'user' | 'comment';
   targetId: string;
   targetTitle: string;
+  /** Pinned to `request.auth.uid` by the rules - never form input. */
   reporterId: string;
   reporterName: string;
   reportedUserId: string;
@@ -370,7 +403,12 @@ export interface Report {
   reason: ReportReason;
   description: string;
   status: 'pending' | 'resolved' | 'dismissed';
-  createdAt: string;
+  createdAtMs: number;
+  /** Set when a moderator closes (or reopens) the case. */
+  resolvedAtMs?: number;
+  /** The moderator who decided - always `request.auth.uid` in the rules. */
+  resolvedById?: string;
+  resolutionNote?: string;
 }
 
 export interface Announcement {
@@ -379,16 +417,30 @@ export interface Announcement {
   content: string;
   priority: 'low' | 'normal' | 'urgent';
   targetAudience: 'all' | 'students' | 'mentors' | 'CSE' | 'ECE';
-  createdAt: string;
+  /** The admin who published it; frozen by the rules. */
+  authorId: string;
   authorName: string;
+  createdAtMs: number;
+  /** Derived from `createdAtMs` for display. */
+  createdAt: string;
   isActive: boolean;
 }
 
+/**
+ * One row of the append-only moderation trail (`auditLogs/{logId}`).
+ *
+ * `actorId` is pinned to the caller on write, so nobody can file a decision
+ * under another member's name; `update` is refused outright by the rules.
+ */
 export interface AuditLog {
   id: string;
+  actorId: string;
+  /** Display name captured when the action happened. */
   actor: string;
   action: string;
   target: string;
+  createdAtMs: number;
+  /** Derived from `createdAtMs` for display. */
   timestamp: string;
   type: 'user' | 'doubt' | 'moderation' | 'system';
 }
@@ -432,20 +484,32 @@ export function toUserSnapshot(user: User): UserSnapshot {
 
 /**
  * Admin moderation settings singleton (`adminSettings/{singleton}` in Firestore).
+ *
+ * Read and write are both moderator-only in `firestore.rules`, and the four
+ * policy values are range/type checked there - the client's validation is
+ * for good error copy, never for security.
  */
 export interface AdminSettings {
   requireFacultyApproval: boolean;
   autoFlagSpamWords: boolean;
   allowedDomain: string;
   minRepToComment: number;
+  updatedAtMs?: number;
+  /** The admin who last saved the policy (`request.auth.uid` in rules). */
+  updatedBy?: string;
+  /** Derived from `updatedAtMs` for display. */
   updatedAt?: string;
 }
 
+/** A formal academic warning (`warnings/{warningId}`, moderator-issued). */
 export interface Warning {
   id: string;
   userId: string;
   userName: string;
   reason: string;
-  issuedBy: string;
+  issuedById: string;
+  issuedByName: string;
+  createdAtMs: number;
+  /** Derived from `createdAtMs` for display. */
   issuedAt: string;
 }

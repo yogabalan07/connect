@@ -1,20 +1,75 @@
-import React, { useState } from 'react';
-import { BarChart3, TrendingUp, Users, CheckCircle2, HelpCircle, Activity } from 'lucide-react';
+import React, { useMemo } from 'react';
+import { Users, CheckCircle2, MessageSquare, Flag, Activity } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 
+/**
+ * Campus analytics computed from the collections the app actually owns.
+ *
+ * Every number here is derived from live Firestore data - `users`,
+ * `doubts`, `answers`, `reports`, `auditLogs`. Nothing is hard-coded: an
+ * invented "1,842 Active Daily Inquirers" or a "<0.2% flagged" claim would
+ * be indistinguishable from a real one on screen, and this page is read as
+ * evidence.
+ *
+ * There is deliberately no 7d / 30d / semester toggle: those windows would
+ * need a time-series query over a date index, and a selector that silently
+ * shows the same totals is worse than no selector at all.
+ */
 export const AdminAnalyticsPage: React.FC = () => {
-  const { doubts, users, categories } = useApp();
-  const [metricTimeframe, setMetricTimeframe] = useState<'7d' | '30d' | 'semester'>('7d');
+  const { doubts, users, categories, answers, reports, auditLogs } = useApp();
 
+  const approvedMembers = users.filter(u => u.status === 'approved').length;
   const solvedCount = doubts.filter(d => d.hasAcceptedAnswer).length;
   const resolutionPercentage = Math.round((solvedCount / (doubts.length || 1)) * 100);
+  const pendingReports = reports.filter(r => r.status === 'pending').length;
+  const closedReports = reports.length - pendingReports;
 
-  const deptBreakdown = [
-    { dept: 'Computer Science (CSE)', count: 24, percentage: 48 },
-    { dept: 'Electronics & Comm (ECE)', count: 14, percentage: 28 },
-    { dept: 'Information Tech (IT)', count: 6, percentage: 12 },
-    { dept: 'Electrical & Electronics (EEE)', count: 4, percentage: 8 },
-    { dept: 'Mechanical & Civil', count: 2, percentage: 4 }
+  const deptBreakdown = useMemo(() => {
+    const counts = new Map<string, number>();
+    doubts.forEach(doubt => {
+      const dept = doubt.authorSnapshot.department || 'Unspecified';
+      counts.set(dept, (counts.get(dept) ?? 0) + 1);
+    });
+    const total = doubts.length || 1;
+    return Array.from(counts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([dept, count]) => ({
+        dept,
+        count,
+        percentage: Math.round((count / total) * 100)
+      }));
+  }, [doubts]);
+
+  const metrics = [
+    {
+      label: 'Approved Members',
+      value: approvedMembers.toLocaleString(),
+      note: `${users.length - approvedMembers} awaiting or blocked`,
+      icon: Users,
+      tone: 'text-white'
+    },
+    {
+      label: 'Solved Ratio',
+      value: `${resolutionPercentage}%`,
+      note: `${solvedCount} of ${doubts.length} doubts accepted a solution`,
+      icon: CheckCircle2,
+      tone: 'text-emerald-400'
+    },
+    {
+      label: 'Answers Posted',
+      value: answers.length.toLocaleString(),
+      note: `${doubts.length} questions in the forum`,
+      icon: MessageSquare,
+      tone: 'text-indigo-400'
+    },
+    {
+      label: 'Open Reports',
+      value: pendingReports.toLocaleString(),
+      note: `${closedReports} closed in the queue`,
+      icon: Flag,
+      tone: 'text-rose-400'
+    }
   ];
 
   return (
@@ -23,50 +78,25 @@ export const AdminAnalyticsPage: React.FC = () => {
         <div>
           <h1 className="text-2xl font-bold text-white tracking-tight">Campus Academic Analytics</h1>
           <p className="text-xs text-slate-400 mt-1">
-            Student participation, resolution rates, and departmental engagement metrics
+            Derived from the live forum, directory and moderation collections
           </p>
         </div>
 
-        <div className="flex items-center gap-1 p-1 bg-slate-900 rounded-xl border border-slate-800">
-          {['7d', '30d', 'semester'].map(tf => (
-            <button
-              key={tf}
-              onClick={() => setMetricTimeframe(tf as any)}
-              className={`px-3 py-1 rounded-lg text-xs font-semibold uppercase font-mono transition-colors ${
-                metricTimeframe === tf ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              {tf}
-            </button>
-          ))}
+        <div className="flex items-center gap-2 text-[11px] font-mono text-slate-500 bg-slate-900 border border-slate-800 px-3 py-1.5 rounded-xl">
+          <Activity className="w-3.5 h-3.5" />
+          {auditLogs.length} audit entries recorded
         </div>
       </div>
 
       {/* Top Level Metric Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800">
-          <span className="text-[11px] text-slate-400 font-semibold">Active Daily Inquirers</span>
-          <div className="text-2xl font-bold text-white font-mono mt-1">1,842</div>
-          <span className="text-[10px] text-emerald-400 font-medium">↑ +14.2% vs last week</span>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800">
-          <span className="text-[11px] text-slate-400 font-semibold">Solved Ratio</span>
-          <div className="text-2xl font-bold text-emerald-400 font-mono mt-1">{resolutionPercentage}%</div>
-          <span className="text-[10px] text-slate-400">Verified solutions</span>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800">
-          <span className="text-[11px] text-slate-400 font-semibold">Average Response Time</span>
-          <div className="text-2xl font-bold text-indigo-400 font-mono mt-1">38 mins</div>
-          <span className="text-[10px] text-emerald-400 font-medium">Under 1 hour SLA</span>
-        </div>
-
-        <div className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800">
-          <span className="text-[11px] text-slate-400 font-semibold">Flagged Content Rate</span>
-          <div className="text-2xl font-bold text-slate-200 font-mono mt-1">&lt; 0.2%</div>
-          <span className="text-[10px] text-slate-400">High academic integrity</span>
-        </div>
+        {metrics.map(metric => (
+          <div key={metric.label} className="p-4 rounded-2xl bg-slate-900/80 border border-slate-800">
+            <span className="text-[11px] text-slate-400 font-semibold">{metric.label}</span>
+            <div className={`text-2xl font-bold font-mono mt-1 ${metric.tone}`}>{metric.value}</div>
+            <span className="text-[10px] text-slate-400">{metric.note}</span>
+          </div>
+        ))}
       </div>
 
       {/* Charts Grid */}
@@ -75,20 +105,26 @@ export const AdminAnalyticsPage: React.FC = () => {
         <div className="p-6 rounded-3xl bg-slate-900/80 border border-slate-800 space-y-4">
           <h2 className="text-sm font-bold text-white">Department Question Volume Distribution</h2>
           <div className="space-y-3 pt-2">
-            {deptBreakdown.map((item, idx) => (
-              <div key={idx} className="space-y-1">
-                <div className="flex items-center justify-between text-xs">
-                  <span className="text-slate-300 font-medium">{item.dept}</span>
-                  <span className="text-slate-400 font-mono">{item.percentage}% ({item.count} questions)</span>
+            {deptBreakdown.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-400">No questions yet.</div>
+            ) : (
+              deptBreakdown.map(item => (
+                <div key={item.dept} className="space-y-1">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-300 font-medium">{item.dept}</span>
+                    <span className="text-slate-400 font-mono">
+                      {item.percentage}% ({item.count} questions)
+                    </span>
+                  </div>
+                  <div className="w-full h-2 rounded-full bg-slate-950 overflow-hidden">
+                    <div
+                      style={{ width: `${item.percentage}%` }}
+                      className="h-full bg-gradient-to-r from-purple-600 to-indigo-500 rounded-full"
+                    />
+                  </div>
                 </div>
-                <div className="w-full h-2 rounded-full bg-slate-950 overflow-hidden">
-                  <div
-                    style={{ width: `${item.percentage}%` }}
-                    className="h-full bg-gradient-to-r from-purple-600 to-indigo-500 rounded-full"
-                  />
-                </div>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
 
