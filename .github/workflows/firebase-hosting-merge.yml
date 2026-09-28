@@ -11,7 +11,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: npm run build
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Provide the Firebase web config
+        # The VITE_FIREBASE_* values identify the Firebase app and are public
+        # by design - they already ship in the committed .env.example. Writing
+        # them to .env makes a CI build behave exactly like a local one instead
+        # of producing a bundle with no config at all.
+        run: cp .env.example .env
+      - name: Type-check and test
+        run: npm run lint && npm run test
+      - name: Build
+        run: npm run build
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}

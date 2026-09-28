@@ -113,7 +113,14 @@ firebase deploy --only hosting,firestore:rules,firestore:indexes
 
 Hosting is also deployed by CI (`.github/workflows/firebase-hosting-merge.yml`)
 on pushes to `main`, and preview-deployed for pull requests
-(`firebase-hosting-pull-request.yml`).
+(`firebase-hosting-pull-request.yml`). Both install with `npm ci`, write the
+public Firebase web config out of `.env.example`, run `npm run lint` and
+`npm run test`, then build — so a red type-check or test run blocks the deploy.
+
+> **One repository secret is required for CI:** `FIREBASE_SERVICE_ACCOUNT_CONNECT_YB`
+> (a service-account JSON key with Firebase Hosting admin). Until it exists,
+> push deploys from CI will fail and `firebase deploy` from a machine that is
+> already logged in remains the working path.
 
 Live site: `https://connect-yb.web.app`
 
